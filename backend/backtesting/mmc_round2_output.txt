@@ -1,0 +1,51 @@
+MMC Track-A ROUND 2 (corrected composite) | XAUUSD M5 | last 180 days
+================================================================================================
+Loaded 35292 candles | cost/trade 0.35 price units
+Bar size 300s | train < 2026-07-22 04:05:00 <= validation
+
+================================================================================================
+TRAIN RESULTS (all three configs)
+================================================================================================
+
+C1 (PRIMARY - inner + A6 + A3)
+    TRAIN trades  59 | WR  49.1% | PF  1.09 | avgWin 1.15R | net   +2.90R | maxDD  5.86R | E/trade +0.049R
+
+C2 (train-only diag - C1 + ATR<1.5x median)
+    TRAIN trades  56 | WR  50.9% | PF  1.16 | avgWin 1.15R | net   +4.88R | maxDD  5.86R | E/trade +0.087R
+
+C3 (train-only diag - C1 with 'mid' rejection)
+    TRAIN trades  50 | WR  54.2% | PF  1.29 | avgWin 1.12R | net   +6.85R | maxDD  4.02R | E/trade +0.137R
+
+================================================================================================
+VALIDATION - C1 PRIMARY, run once, this is the final look
+================================================================================================
+
+  C1 TRAIN      : trades  59 | WR  49.1% | PF  1.09 | avgWin 1.15R | net   +2.90R | maxDD  5.86R | E/trade +0.049R
+  C1 VALIDATION : trades  35 | WR  51.4% | PF  1.16 | avgWin 1.12R | net   +2.77R | maxDD  4.08R | E/trade +0.079R
+
+  --- C1 per setup ---
+         key |   n |    WR% |    net R
+  eq_continuation |  94 |   50.0 |    +5.67
+
+  --- C1 per month ---
+         key |   n |    WR% |    net R
+     2026-03 |   5 |   50.0 |    +0.88
+     2026-04 |  14 |   42.9 |    -0.96
+     2026-05 |  12 |   58.3 |    +2.94
+     2026-06 |  16 |   53.3 |    +1.91
+     2026-07 |  15 |   46.7 |    -0.66
+     2026-08 |  20 |   50.0 |    +1.17
+     2026-09 |  12 |   50.0 |    +0.40
+
+  --- C1 per direction (regime check - do NOT turn into a filter) ---
+         key |   n |    WR% |    net R
+         BUY |  44 |   58.1 |   +10.71
+        SELL |  50 |   42.9 |    -5.04
+
+================================================================================================
+TARGET CHECK (WR >= 53% AND expectancy >= +0.08R after costs)
+================================================================================================
+  C1 TRAIN       : WR 49.1% [fail] | expectancy +0.049R [fail]
+  C1 VALIDATION  : WR 51.4% [fail] | expectancy +0.079R [fail]
+
+C1 trade list saved to mmc_round2_trades.csv

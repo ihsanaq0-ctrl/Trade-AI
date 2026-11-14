@@ -1,0 +1,10 @@
+{
+  "name": "TradeAI Pro",
+  "short_name": "TradeAI",
+  "description": "AI-Powered Forex Trading Platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e17",
+  "theme_color": "#0a0e17",
+  "icons": []
+}

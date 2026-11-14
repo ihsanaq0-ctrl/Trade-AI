@@ -1,0 +1,51 @@
+MMC Track-A ROUND 3 (FINAL) | USDJPY M5 | last 180 days
+================================================================================================
+Loaded 37198 candles | cost/trade 0.015
+Bar size 300s | train < 2026-07-21 18:05:00 <= validation
+
+================================================================================================
+TRAIN PHASE — C4/C5 compete on TRAIN expectancy only
+================================================================================================
+
+C3 (reference, round-2 winner)
+    TRAIN trades  55 | WR  45.1% | PF  0.66 | avgWin 0.93R | net  -12.04R | maxDD 14.36R | E/trade -0.219R
+
+C4 (= C3 + ATR<1.5x median)
+    TRAIN trades  49 | WR  46.8% | PF  0.68 | avgWin 0.91R | net   -9.83R | maxDD 12.97R | E/trade -0.201R
+
+C5 (= C4 + 180-bar loss cooldown)
+    TRAIN trades  41 | WR  51.3% | PF  0.84 | avgWin 0.91R | net   -4.12R | maxDD  7.39R | E/trade -0.100R
+
+    C4 vs C3 kill-count: removed 8 trades (2W/6L), combined -2.63R (good cut)
+
+    WINNER BY TRAIN EXPECTANCY: C5
+
+================================================================================================
+VALIDATION — C5, one look, FINAL. Decision rule is pre-declared.
+================================================================================================
+
+  C5 TRAIN      : trades  41 | WR  51.3% | PF  0.84 | avgWin 0.91R | net   -4.12R | maxDD  7.39R | E/trade -0.100R
+  C5 VALIDATION : trades  20 | WR  52.6% | PF  1.06 | avgWin 1.06R | net   +0.37R | maxDD  3.19R | E/trade +0.019R
+
+  --- C5 per month ---
+         key |   n |    WR% |    net R
+     2026-03 |   7 |   57.1 |    +0.81
+     2026-04 |  10 |   44.4 |    -2.34
+     2026-05 |   8 |   50.0 |    -1.14
+     2026-06 |  10 |   60.0 |    +0.26
+     2026-07 |  10 |   44.4 |    -2.09
+     2026-08 |   9 |   62.5 |    +1.89
+     2026-09 |   7 |   42.9 |    -1.14
+
+  --- C5 per direction (regime artifact — NOT a filter) ---
+         key |   n |    WR% |    net R
+         BUY |  38 |   52.6 |    -2.17
+        SELL |  23 |   50.0 |    -1.57
+
+================================================================================================
+PRE-DECLARED DECISION (do not renegotiate after reading)
+================================================================================================
+  TIER 3 — STOP TUNING MMC. Bottleneck is data, not filters.
+  Pooled: trades  61 | WR  51.7% | PF  0.91 | avgWin 0.96R | net   -3.75R | maxDD  7.39R | E/trade -0.061R  |  t-stat vs zero edge: -0.46 (<2 = indistinguishable from noise)
+
+C5 trade list saved to mmc_round3_trades.csv

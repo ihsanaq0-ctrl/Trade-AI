@@ -1,0 +1,51 @@
+MMC Track-A ROUND 3 (FINAL) | XAUUSD M5 | last 180 days
+================================================================================================
+Loaded 35289 candles | cost/trade 0.35
+Bar size 300s | train < 2026-07-22 04:10:00 <= validation
+
+================================================================================================
+TRAIN PHASE — C4/C5 compete on TRAIN expectancy only
+================================================================================================
+
+C3 (reference, round-2 winner)
+    TRAIN trades  50 | WR  54.2% | PF  1.29 | avgWin 1.12R | net   +6.85R | maxDD  4.02R | E/trade +0.137R
+
+C4 (= C3 + ATR<1.5x median)
+    TRAIN trades  47 | WR  56.5% | PF  1.41 | avgWin 1.11R | net   +8.85R | maxDD  4.02R | E/trade +0.188R
+
+C5 (= C4 + 180-bar loss cooldown)
+    TRAIN trades  43 | WR  55.8% | PF  1.37 | avgWin 1.11R | net   +7.21R | maxDD  5.06R | E/trade +0.168R
+
+    C4 vs C3 kill-count: removed 5 trades (1W/4L), combined -2.00R (good cut)
+
+    WINNER BY TRAIN EXPECTANCY: C4
+
+================================================================================================
+VALIDATION — C4, one look, FINAL. Decision rule is pre-declared.
+================================================================================================
+
+  C4 TRAIN      : trades  47 | WR  56.5% | PF  1.41 | avgWin 1.11R | net   +8.85R | maxDD  4.02R | E/trade +0.188R
+  C4 VALIDATION : trades  26 | WR  53.8% | PF  1.26 | avgWin 1.10R | net   +3.13R | maxDD  4.09R | E/trade +0.120R
+
+  --- C4 per month ---
+         key |   n |    WR% |    net R
+     2026-03 |   4 |   66.7 |    +1.89
+     2026-04 |  12 |   50.0 |    +0.82
+     2026-05 |   8 |   75.0 |    +4.29
+     2026-06 |  12 |   58.3 |    +2.67
+     2026-07 |  14 |   50.0 |    +0.38
+     2026-08 |  13 |   53.8 |    +1.56
+     2026-09 |  10 |   50.0 |    +0.36
+
+  --- C4 per direction (regime artifact — NOT a filter) ---
+         key |   n |    WR% |    net R
+         BUY |  34 |   63.6 |   +11.41
+        SELL |  39 |   48.7 |    +0.57
+
+================================================================================================
+PRE-DECLARED DECISION (do not renegotiate after reading)
+================================================================================================
+  TIER 1 — LIVE CANDIDATE (paper-trade 2-4 weeks before any live use)
+  Pooled: trades  73 | WR  55.6% | PF  1.35 | avgWin 1.11R | net  +11.98R | maxDD  4.80R | E/trade +0.164R  |  t-stat vs zero edge: 1.32 (<2 = indistinguishable from noise)
+
+C4 trade list saved to mmc_round3_trades.csv

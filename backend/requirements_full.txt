@@ -1,0 +1,24 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+supabase==2.5.0
+# Relaxed from ==2.9.0: pydantic 2.9.x has no Python 3.13 wheels.
+# 2.10+ ships cp313 wheels and is API-compatible with the code.
+pydantic>=2.10
+pydantic-settings==2.5.0
+python-dotenv==1.0.0
+httpx==0.27.0
+python-jose[cryptography]==3.3.0
+# Relaxed from ==43.0.0: no Python 3.13 wheels (>=44 has them).
+cryptography>=44.0
+# Relaxed from ==3.0.0: that version doesn't exist (pip has 3.1.0/3.2.0).
+pendulum>=3.1.0
+# Relaxed from ==2.2.0 / ==1.26.4: these exact versions predate Python 3.13
+# and force a source build (no cp313 wheels). 2.2.3+/2.1+ ship cp313 wheels.
+pandas>=2.2.3
+numpy>=2.1.0
+# Connects to the locally running MT5 terminal. NOT available on pypi.org in
+# some regions — install via mirror: pip install MetaTrader5 -i https://pypi.tuna.tsinghua.edu.cn/simple
+MetaTrader5
+
+# Additional tooling useful for building the launcher (optional)
+pyinstaller>=5.13.0
