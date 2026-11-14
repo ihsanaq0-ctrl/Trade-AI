@@ -41,9 +41,10 @@ export default function Profile({ session }) {
 
     api.get('/api/markets/active-account', { headers })
       .then(d => {
-        if (d && d.login) setActiveAccount(d)
+        if (d && d.connected && d.login) setActiveAccount(d)
+        else setActiveAccount(null)
       })
-      .catch(() => {})
+      .catch(() => setActiveAccount(null))
   }, [session])
 
   const handleCopyUid = () => {
@@ -86,6 +87,10 @@ export default function Profile({ session }) {
   }
 
   const handleLogout = async () => {
+    try {
+      localStorage.removeItem('trade_profile_name')
+      localStorage.removeItem('favPairs')
+    } catch {}
     await supabase.auth.signOut()
     navigate('/login')
   }

@@ -118,3 +118,16 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
         )
 
     return user
+
+
+async def get_optional_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> dict | None:
+    """Return authenticated user claims if a valid token is present, else None."""
+    if not credentials or not credentials.credentials:
+        return None
+    try:
+        return await get_current_user(request, credentials)
+    except Exception:
+        return None

@@ -43,9 +43,9 @@ export default function Accounts({ session }) {
         setAccounts([])
       })
 
-    api.get('/api/markets/active-account')
-      .then(d => setMt5Info(d?.balance !== undefined ? d : null))
-      .catch(() => {})
+    api.get('/api/markets/active-account', { headers })
+      .then(d => setMt5Info(d?.connected && d?.login ? d : null))
+      .catch(() => setMt5Info(null))
       .finally(() => setLoading(false))
   }, [session])
 
@@ -72,27 +72,30 @@ export default function Accounts({ session }) {
         balance: saved.balance || 0,
         equity: saved.equity || 0,
         profit: saved.profit || 0,
-        status: 'connected',
+        status: 'disconnected',
         color: (saved.account_type || form.type) === 'live' ? '#3b5bf5' : '#f59e0b'
       }
 
-      // Automatically connect to register credentials and fetch balance
+      // Automatically attempt connect
       try {
         const connRes = await api.post(`/api/accounts/${saved.id}/connect`)
         if (connRes?.success) {
+          finalAcc.status = 'connected'
           finalAcc.balance = connRes.balance ?? finalAcc.balance
           finalAcc.equity = connRes.equity ?? finalAcc.equity
+          // Refresh active terminal info
+          api.get('/api/markets/active-account').then(d => setMt5Info(d?.connected && d?.login ? d : null)).catch(() => {})
         }
       } catch (connErr) {
-        console.warn('Initial connect warning:', connErr)
+        console.warn('Initial connect notice:', connErr)
       }
 
       setAccounts(prev => [finalAcc, ...prev.filter(a => a.id !== finalAcc.id)])
       setShowAdd(false)
       setForm({ nickname: '', broker: 'Exness', login: '', password: '', server: '', type: 'demo' })
-      toast.success('Broker account connected successfully')
+      toast.success('Broker account registered successfully')
     } catch (e) {
-      toast.error(`Connection failed: ${e?.response?.data?.detail || e.message}`)
+      toast.error(`Registration failed: ${e?.response?.data?.detail || e.message}`)
     }
   }
 
@@ -106,7 +109,9 @@ export default function Accounts({ session }) {
         ...a,
         status: isConnecting ? 'connected' : 'disconnected',
         ...(res?.balance !== undefined ? { balance: res.balance, equity: res.equity } : {})
-      } : a))
+      } : (isConnecting ? { ...a, status: 'disconnected' } : a)))
+      
+      api.get('/api/markets/active-account').then(d => setMt5Info(d?.connected && d?.login ? d : null)).catch(() => {})
       toast.info(isConnecting ? 'Account connected' : 'Account disconnected')
     } catch (e) {
       toast.error(`Operation failed: ${e?.response?.data?.detail || e.message}`)

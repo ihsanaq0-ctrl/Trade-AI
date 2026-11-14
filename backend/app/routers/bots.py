@@ -78,6 +78,27 @@ async def start_bot(bot_id: str, user=Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="Bot not found")
         if result.data["status"] == "running":
             return {"success": True, "message": "Bot already running"}
+
+        # Verify user has an active connected broker account
+        acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+        if not acc_res.data:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot start bot: No connected broker account found. Please connect your broker account in the Portfolio tab first."
+            )
+
+        user_acc = acc_res.data[0]
+        user_login = str(user_acc.get("login", "")).strip()
+
+        from app.services import metaapi_service as mt5
+        terminal_info = await mt5.get_account_info("")
+        terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+
+        if not terminal_login or terminal_login != user_login:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot start bot: MetaTrader 5 Desktop is currently logged into account #{terminal_login or 'None'}, but your connected account is #{user_login}. Please log into your account #{user_login} in MT5 Desktop."
+            )
         
         try:
             await bot_engine.start_bot(bot_id)

@@ -25,7 +25,7 @@ export default function Navbar({ session, onToggleMobileSidebar }) {
         api.get('/api/trades/positions').catch(() => null)
       ]).then(([acc, pos]) => {
         setCopilotData({
-          account: acc && acc.login ? acc : null,
+          account: acc && acc.connected && acc.login ? acc : null,
           positions: pos && Array.isArray(pos.positions) ? pos.positions : [],
           loading: false
         })

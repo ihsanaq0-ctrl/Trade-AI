@@ -45,15 +45,27 @@ async def open_manual_trade(data: TradeOpenRequest, user=Depends(get_current_use
 
     clean_symbol = data.symbol.replace("/", "").replace(" ", "").strip().upper()
 
-    # Identify user's connected MT5 account if available
-    account_id = data.account_id or ""
-    if not account_id:
-        try:
-            acc_res = supabase.table("accounts").select("id").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
-            if acc_res.data:
-                account_id = acc_res.data[0]["id"]
-        except Exception as e:
-            logger.warning(f"Failed to lookup active account: {e}")
+    # Identify user's connected MT5 account
+    acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+    if not acc_res.data:
+        raise HTTPException(
+            status_code=400,
+            detail="No connected trading account found. Please connect your broker account in the Portfolio tab before trading."
+        )
+
+    user_acc = acc_res.data[0]
+    account_id = user_acc["id"]
+    user_login = str(user_acc.get("login", "")).strip()
+
+    # Verify MT5 terminal is logged into THIS user's account
+    terminal_info = await mt5.get_account_info("")
+    terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+
+    if not terminal_login or terminal_login != user_login:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Security alert: MT5 Desktop is currently logged into account #{terminal_login or 'None'}, but your connected account is #{user_login}. Please log into account #{user_login} on MT5 Desktop first."
+        )
 
     # Send order to MT5
     result = await mt5.place_order(
@@ -112,8 +124,21 @@ async def open_manual_trade(data: TradeOpenRequest, user=Depends(get_current_use
 
 @router.get("/positions")
 async def get_live_positions(symbol: str = None, user=Depends(get_current_user)):
-    """Fetch live open positions directly from MT5 terminal."""
+    """Fetch live open positions directly from MT5 terminal for the authenticated user's account."""
     try:
+        acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+        if not acc_res.data:
+            return {"positions": []}
+
+        user_acc = acc_res.data[0]
+        user_login = str(user_acc.get("login", "")).strip()
+
+        terminal_info = await mt5.get_account_info("")
+        terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+
+        if not terminal_login or terminal_login != user_login:
+            return {"positions": []}
+
         positions = await mt5.get_positions("")
         if symbol:
             clean = symbol.replace("/", "").replace(" ", "").strip().upper()
@@ -126,6 +151,19 @@ async def get_live_positions(symbol: str = None, user=Depends(get_current_user))
 @router.post("/close")
 async def close_trade(data: TradeCloseRequest, user=Depends(get_current_user)):
     """Close an open trade by ticket number via MT5."""
+    acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+    if not acc_res.data:
+        raise HTTPException(status_code=403, detail="No connected account found for this user")
+
+    user_acc = acc_res.data[0]
+    user_login = str(user_acc.get("login", "")).strip()
+
+    terminal_info = await mt5.get_account_info("")
+    terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+
+    if not terminal_login or terminal_login != user_login:
+        raise HTTPException(status_code=403, detail="MT5 terminal is not logged into your account")
+
     result = await mt5.close_position(data.account_id or "", str(data.ticket))
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Close failed"))
@@ -160,6 +198,20 @@ async def modify_sl_trade(data: TradeModifySlRequest, user=Depends(get_current_u
     """Modify stop loss and/or take profit on an open trade via MT5."""
     if data.stop_loss is None and data.take_profit is None:
         raise HTTPException(status_code=400, detail="At least one of stop_loss or take_profit required")
+        
+    acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+    if not acc_res.data:
+        raise HTTPException(status_code=403, detail="No connected account found for this user")
+
+    user_acc = acc_res.data[0]
+    user_login = str(user_acc.get("login", "")).strip()
+
+    terminal_info = await mt5.get_account_info("")
+    terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+
+    if not terminal_login or terminal_login != user_login:
+        raise HTTPException(status_code=403, detail="MT5 terminal is not logged into your account")
+
     result = await mt5.modify_sl_tp(data.account_id or "", str(data.ticket),
                                     stop_loss=data.stop_loss, take_profit=data.take_profit)
     if not result.get("success"):
@@ -171,6 +223,20 @@ async def partial_close_trade(data: TradePartialCloseRequest, user=Depends(get_c
     """Close a percentage of an open trade by ticket number via MT5."""
     if data.close_pct <= 0 or data.close_pct > 1:
         raise HTTPException(status_code=400, detail="close_pct must be in (0, 1]")
+        
+    acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+    if not acc_res.data:
+        raise HTTPException(status_code=403, detail="No connected account found for this user")
+
+    user_acc = acc_res.data[0]
+    user_login = str(user_acc.get("login", "")).strip()
+
+    terminal_info = await mt5.get_account_info("")
+    terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+
+    if not terminal_login or terminal_login != user_login:
+        raise HTTPException(status_code=403, detail="MT5 terminal is not logged into your account")
+
     result = await mt5.partial_close_position(data.account_id or "", str(data.ticket), data.close_pct)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Partial close failed"))

@@ -78,8 +78,8 @@ export default function Bot({ session }) {
 
     // Fetch account info
     api.get('/api/markets/active-account', { headers })
-      .then(d => setAccountInfo(d?.balance !== undefined ? d : null))
-      .catch(() => {})
+      .then(d => setAccountInfo(d?.connected && d?.login ? d : null))
+      .catch(() => setAccountInfo(null))
 
     // Poll every 15s for active bots status
     pollRef.current = setInterval(fetchData, 15000)

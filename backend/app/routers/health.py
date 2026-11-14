@@ -1,5 +1,10 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from app.services import metaapi_service as mt5
+from app.middleware import get_optional_user
+from app.database import supabase
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
@@ -62,10 +67,65 @@ async def get_candles(
 
 
 @router.get("/api/markets/active-account")
-async def get_active_account():
-    """Get the currently logged-in MT5 account info."""
+async def get_active_account(user=Depends(get_optional_user)):
+    """
+    Get the currently connected broker account for the AUTHENTICATED user.
+    Never exposes another user's local terminal account or balances.
+    """
+    if not user or not user.get("sub"):
+        return {"connected": False, "login": None, "balance": 0.0, "equity": 0.0}
+
     try:
-        info = await mt5.get_account_info('')
-        return info
+        # Query Supabase for this specific user's connected account
+        res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+        if not res.data:
+            return {"connected": False, "login": None, "balance": 0.0, "equity": 0.0}
+
+        user_acc = res.data[0]
+        user_login = str(user_acc.get("login", "")).strip()
+
+        # Check MT5 terminal
+        terminal_info = await mt5.get_account_info(user_acc["id"])
+        terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+
+        # Only return live terminal figures if the terminal is logged into THIS user's account!
+        if terminal_login and terminal_login == user_login:
+            # Update DB with freshest balance if changed
+            bal = float(terminal_info.get("balance", user_acc.get("balance") or 0.0))
+            eq = float(terminal_info.get("equity", bal))
+            try:
+                supabase.table("accounts").update({
+                    "balance": bal,
+                    "equity": eq,
+                    "profit": float(terminal_info.get("profit", 0.0))
+                }).eq("id", user_acc["id"]).execute()
+            except Exception:
+                pass
+
+            return {
+                **terminal_info,
+                "id": user_acc["id"],
+                "nickname": user_acc.get("nickname"),
+                "broker": user_acc.get("broker"),
+                "connected": True,
+                "terminal_synced": True
+            }
+        else:
+            # Terminal is either not logged in or logged into a different account
+            return {
+                "id": user_acc["id"],
+                "nickname": user_acc.get("nickname"),
+                "broker": user_acc.get("broker"),
+                "login": user_acc.get("login"),
+                "server": user_acc.get("server"),
+                "balance": float(user_acc.get("balance") or 0.0),
+                "equity": float(user_acc.get("equity") or 0.0),
+                "profit": float(user_acc.get("profit") or 0.0),
+                "currency": "USD",
+                "connected": True,
+                "terminal_synced": False,
+                "warning": f"MT5 terminal is not synced with account #{user_login}"
+            }
     except Exception as e:
-        return {"error": str(e)}
+        logger.error(f"Error fetching active account: {e}")
+        return {"connected": False, "error": str(e), "balance": 0.0, "equity": 0.0}

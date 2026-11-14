@@ -58,10 +58,18 @@ export default function Dashboard({ session }) {
     if (session?.access_token) {
       const headers = { Authorization: `Bearer ${session.access_token}` }
 
-      // 1. Live MT5 Active Account
+      // 1. Live MT5 Active Account (tied to authenticated user)
       api.get('/api/markets/active-account', { headers })
-        .then(data => isMounted && data?.balance !== undefined && setAccount(data))
-        .catch(() => {})
+        .then(data => {
+          if (isMounted) {
+            if (data && data.connected && data.login) {
+              setAccount(data)
+            } else {
+              setAccount(null)
+            }
+          }
+        })
+        .catch(() => isMounted && setAccount(null))
 
       // 2. Recent Live Trades
       api.get('/api/trades?limit=10', { headers })

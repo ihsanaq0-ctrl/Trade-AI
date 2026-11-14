@@ -96,9 +96,13 @@ export default function ChartModal({ pair, onClose }) {
   useEffect(() => {
     api.get('/api/markets/active-account')
       .then(data => {
-        if (data && !data.error) setAccountInfo(data)
+        if (data && data.connected && data.login) {
+          setAccountInfo(data)
+        } else {
+          setAccountInfo(null)
+        }
       })
-      .catch(() => {})
+      .catch(() => setAccountInfo(null))
   }, [])
 
   // 2. Fetch live positions on this symbol
@@ -278,6 +282,11 @@ export default function ChartModal({ pair, onClose }) {
 
   // --- MANUAL TRADE EXECUTION HANDLER ---
   const handleExecuteTrade = async (type) => {
+    if (!accountInfo || !accountInfo.connected || !accountInfo.login) {
+      toast.error('No trading account connected. Please connect your broker account in the Accounts tab before executing trades.')
+      return
+    }
+
     const volume = parseFloat(lotSize)
     if (isNaN(volume) || volume <= 0) {
       toast.error('Please enter a valid lot size greater than 0 (e.g. 0.01)')
@@ -1068,6 +1077,42 @@ export default function ChartModal({ pair, onClose }) {
               {showAdvanced ? 'Hide Risk Parameters' : 'Set Stop Loss & Take Profit'}
               {showAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
+          </div>
+
+          {/* Account Connection Status Bar */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 14px',
+            borderRadius: '10px',
+            background: accountInfo?.connected ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+            border: `1px solid ${accountInfo?.connected ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)'}`,
+            fontSize: '12px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: accountInfo?.connected ? '#10b981' : '#f59e0b',
+                boxShadow: accountInfo?.connected ? '0 0 8px #10b981' : '0 0 8px #f59e0b'
+              }} />
+              {accountInfo?.connected ? (
+                <span style={{ color: '#e2e8f0' }}>
+                  Connected Account: <strong style={{ color: '#10b981' }}>#{accountInfo.login}</strong> ({accountInfo.server || 'MetaTrader 5'}) • Balance: <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#fff', fontWeight: 600 }}>${Number(accountInfo.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                </span>
+              ) : (
+                <span style={{ color: '#f59e0b' }}>
+                  ⚠️ No MT5 account connected. Go to <strong>Accounts</strong> tab to connect your trading account before executing orders.
+                </span>
+              )}
+            </div>
+            {accountInfo?.connected && (
+              <span style={{ color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-mono, monospace)' }}>
+                Equity: ${Number(accountInfo.equity || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            )}
           </div>
 
           {/* Bottom row: Large Interactive BUY & SELL Buttons */}

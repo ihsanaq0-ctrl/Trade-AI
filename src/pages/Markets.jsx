@@ -59,8 +59,8 @@ export default function Markets() {
     fetchPrices()
     fetchPositions()
     api.get('/api/markets/active-account')
-      .then(d => { if (d && !d.error) setAccountInfo(d) })
-      .catch(() => {})
+      .then(d => { if (d && d.connected && d.login) setAccountInfo(d); else setAccountInfo(null); })
+      .catch(() => setAccountInfo(null))
 
     const priceInterval = setInterval(fetchPrices, 6000)
     const posInterval = setInterval(fetchPositions, 6000)

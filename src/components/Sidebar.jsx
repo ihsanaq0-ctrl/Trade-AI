@@ -20,6 +20,10 @@ export default function Sidebar({ session, mobileOpen, onCloseMobile }) {
   const location = useLocation()
 
   const handleLogout = async () => {
+    try {
+      localStorage.removeItem('trade_profile_name')
+      localStorage.removeItem('favPairs')
+    } catch {}
     await supabase.auth.signOut()
     navigate('/login')
   }

@@ -97,14 +97,14 @@ function Layout() {
           <Route path="/" element={<Navigate to={session ? '/dashboard' : '/login'} replace />} />
           <Route path="/login" element={!session ? <Login /> : <Navigate to="/dashboard" replace />} />
           
-          <Route path="/dashboard" element={<ProtectedRoute session={session}><Dashboard session={session} /></ProtectedRoute>} />
-          <Route path="/markets" element={<ProtectedRoute session={session}><Markets session={session} /></ProtectedRoute>} />
-          <Route path="/bot" element={<ProtectedRoute session={session}><Bot session={session} /></ProtectedRoute>} />
-          <Route path="/analytics" element={<ProtectedRoute session={session}><Analytics session={session} /></ProtectedRoute>} />
-          <Route path="/accounts" element={<ProtectedRoute session={session}><Accounts session={session} /></ProtectedRoute>} />
-          <Route path="/settings" element={<ProtectedRoute session={session}><Settings session={session} /></ProtectedRoute>} />
-          <Route path="/profile" element={<ProtectedRoute session={session}><Profile session={session} /></ProtectedRoute>} />
-          <Route path="/admin" element={<ProtectedRoute session={session}><Admin session={session} /></ProtectedRoute>} />
+          <Route path="/dashboard" element={<ProtectedRoute session={session}><Dashboard key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
+          <Route path="/markets" element={<ProtectedRoute session={session}><Markets key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
+          <Route path="/bot" element={<ProtectedRoute session={session}><Bot key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
+          <Route path="/analytics" element={<ProtectedRoute session={session}><Analytics key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
+          <Route path="/accounts" element={<ProtectedRoute session={session}><Accounts key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute session={session}><Settings key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
+          <Route path="/profile" element={<ProtectedRoute session={session}><Profile key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute session={session}><Admin key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
           
           <Route path="*" element={<Navigate to={session ? '/dashboard' : '/login'} replace />} />
         </Routes>

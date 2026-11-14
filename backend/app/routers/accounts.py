@@ -84,20 +84,40 @@ async def connect_account(account_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Account not found")
 
     acc = result.data
-    balance = float(acc.get("balance") or 0.0)
-    equity = float(acc.get("equity") or balance)
-    profit = float(acc.get("profit") or 0.0)
+    target_login = str(acc.get("login", "")).strip()
+    target_password = acc.get("password", "")
+    target_server = acc.get("server", "")
 
-    # Query local MT5 terminal if available
-    try:
-        from app.services import metaapi_service as mt5
-        info = await mt5.get_account_info(account_id)
-        if info and "balance" in info:
-            balance = float(info.get("balance", balance))
-            equity = float(info.get("equity", equity))
-            profit = float(info.get("profit", 0.0))
-    except Exception:
-        pass
+    from app.services import metaapi_service as mt5
+    
+    # 1. Check current terminal login
+    info = await mt5.get_account_info(account_id)
+    terminal_login = str(info.get("login", "")).strip() if info else ""
+
+    # 2. If terminal login doesn't match, try switching terminal login if password & server exist
+    if terminal_login != target_login and target_login.isdigit():
+        if target_password and target_server:
+            try:
+                mod = mt5._ensure_mt5()
+                switched = mod.login(int(target_login), password=target_password, server=target_server)
+                if switched:
+                    info = await mt5.get_account_info(account_id)
+                    terminal_login = str(info.get("login", "")).strip()
+            except Exception:
+                pass
+
+    if terminal_login != target_login:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to connect: MetaTrader 5 Desktop is currently logged into account #{terminal_login or 'None'}, not #{target_login}. Please log into account #{target_login} on your MT5 Desktop terminal."
+        )
+
+    balance = float(info.get("balance", acc.get("balance") or 0.0))
+    equity = float(info.get("equity", balance))
+    profit = float(info.get("profit", 0.0))
+
+    # Mark other accounts of this user as disconnected
+    supabase.table("accounts").update({"status": "disconnected"}).eq("user_id", user["sub"]).execute()
 
     supabase.table("accounts").update({
         "status": "connected",
@@ -111,7 +131,6 @@ async def connect_account(account_id: str, user=Depends(get_current_user)):
 
 @router.post("/{account_id}/disconnect")
 async def disconnect_account(account_id: str, user=Depends(get_current_user)):
-    # Note: Do not invoke mt5.shutdown() on singleton server terminal, simply mark account disconnected
     supabase.table("accounts").update({"status": "disconnected"}).eq("id", account_id).eq("user_id", user["sub"]).execute()
     return {"success": True, "message": "Disconnected"}
 
@@ -122,19 +141,21 @@ async def sync_account(account_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Account not found")
 
     acc = result.data
-    balance = float(acc.get("balance") or 0.0)
-    equity = float(acc.get("equity") or balance)
-    profit = float(acc.get("profit") or 0.0)
+    target_login = str(acc.get("login", "")).strip()
 
-    try:
-        from app.services import metaapi_service as mt5
-        info = await mt5.get_account_info(account_id)
-        if info and "balance" in info:
-            balance = float(info.get("balance", balance))
-            equity = float(info.get("equity", equity))
-            profit = float(info.get("profit", profit))
-    except Exception:
-        pass
+    from app.services import metaapi_service as mt5
+    info = await mt5.get_account_info(account_id)
+    terminal_login = str(info.get("login", "")).strip() if info else ""
+
+    if terminal_login != target_login:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sync failed: MT5 Desktop is currently logged into account #{terminal_login or 'None'}, not #{target_login}."
+        )
+
+    balance = float(info.get("balance", acc.get("balance") or 0.0))
+    equity = float(info.get("equity", balance))
+    profit = float(info.get("profit", acc.get("profit") or 0.0))
 
     supabase.table("accounts").update({
         "balance": balance,
