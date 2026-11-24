@@ -44,6 +44,11 @@ const strategyDefaults = {
     name: 'Nyao Trade Manager',
     pairs: ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'LTCUSD', 'BNBUSD', 'DOGEUSD', 'ADAUSD', 'AUDUSD', 'GBPJPY'],
     timeframes: ['M1', 'M5', 'M15', 'H1'], defaultPair: 'EURUSD', defaultTimeframe: 'M1'
+  },
+  pipstep_reversal: {
+    name: 'PipStep Reversal EA',
+    pairs: ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD', 'AUDUSD', 'USDCAD', 'GBPJPY'],
+    timeframes: ['M1', 'M5'], defaultPair: 'EURUSD', defaultTimeframe: 'M1'
   }
 }
 
@@ -148,6 +153,11 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
           {strategy === 'mmc_mirror' && (
             <span style={{ display: 'block', marginTop: 8, color: '#f59e0b', background: '#f59e0b22', padding: '8px', borderRadius: '4px' }}>
               <strong>Demo/Paper Mode Default:</strong> Orders will route to your demo account until manually promoted.
+            </span>
+          )}
+          {strategy === 'pipstep_reversal' && (
+            <span style={{ display: 'block', marginTop: 8, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.1)', padding: '8px 12px', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
+              <strong>PipStep Straddle:</strong> Places symmetrical BuyStop & SellStop pending orders (10 pips). Automatically trails SL in steps and reverses trade instantly if SL is hit.
             </span>
           )}
         </p>

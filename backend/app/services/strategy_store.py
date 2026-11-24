@@ -46,6 +46,7 @@ BUILTIN_STRATEGIES = [
     {"name": "signal_strength_hedge", "title": "Signal Strength Hedge", "risk": "High"},
     {"name": "nyao_scalper", "title": "Nyao Scalper (Trade Mgmt)", "risk": "Medium"},
     {"name": "trading_agents", "title": "TradingAgents AI", "description": "Multi-agent committee debate (Technical, Fundamental, Sentiment, Bull vs Bear, Risk Officer)", "risk": "Adaptive"},
+    {"name": "pipstep_reversal", "title": "PipStep Reversal EA", "description": "BuyStop/SellStop straddle pair, step trailing SL & instant reversal on SL hit", "risk": "Medium"},
 ]
 
 

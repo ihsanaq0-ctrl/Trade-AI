@@ -1,4 +1,8 @@
+import os
 from pydantic_settings import BaseSettings
+
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ROOT_DIR = os.path.dirname(_BACKEND_DIR)
 
 class Settings(BaseSettings):
     supabase_url: str = ""
@@ -13,6 +17,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     class Config:
-        env_file = ".env"
+        env_file = [
+            os.path.join(_BACKEND_DIR, ".env"),
+            os.path.join(_ROOT_DIR, ".env"),
+            ".env",
+        ]
+        extra = "ignore"
 
 settings = Settings()
+
+if not settings.supabase_url:
+    settings.supabase_url = os.getenv("VITE_SUPABASE_URL", "")
+if not settings.supabase_key:
+    settings.supabase_key = os.getenv("VITE_SUPABASE_ANON_KEY", "")

@@ -229,11 +229,13 @@ class ScalpModeBot:
             return None
 
         df = df.copy()
-        last_candle_time = df['time'].iloc[-1]
-        if isinstance(last_candle_time, str):
-            last_candle_time = pd.to_datetime(last_candle_time)
-        if last_candle_time.tzinfo is None:
-            last_candle_time = last_candle_time.replace(tzinfo=timezone.utc)
+        raw_time = df['time'].iloc[-1]
+        if isinstance(raw_time, (int, float, np.integer, np.floating)):
+            last_candle_time = pd.to_datetime(raw_time, unit='s', utc=True)
+        else:
+            last_candle_time = pd.to_datetime(raw_time)
+            if getattr(last_candle_time, 'tzinfo', None) is None:
+                last_candle_time = last_candle_time.replace(tzinfo=timezone.utc)
 
         ema_f, ema_s = self.calculate_emas(df)
         atr = self.calculate_atr(df)

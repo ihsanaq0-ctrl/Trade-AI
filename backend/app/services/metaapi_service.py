@@ -485,4 +485,123 @@ async def get_history_deal_profit(ticket: int) -> float:
         return 0.0
         
     total_profit = sum(d.profit for d in deals)
-    return float(total_profit)
+    return float(total_profit)
+
+
+async def get_history_deal_reason(position_ticket: int) -> int:
+    """Get the DEAL_REASON of the deal that closed a position (e.g. DEAL_REASON_SL = 4)."""
+    mt5 = _ensure_mt5()
+    deals = mt5.history_deals_get(position=int(position_ticket))
+    if not deals:
+        return -1
+    for d in reversed(deals):
+        # Entry OUT or OUT_BY is the closing deal
+        if getattr(d, 'entry', None) in (mt5.DEAL_ENTRY_OUT, getattr(mt5, 'DEAL_ENTRY_OUT_BY', 1)):
+            return int(getattr(d, 'reason', -1))
+    return -1
+
+
+async def place_pending_order(account_id: str, pair: str, order_type: str, volume: float,
+                              price: float, stop_loss: float = 0.0, take_profit: float = 0.0,
+                              magic: int = 26110401, comment: str = "PIPSTEP") -> dict:
+    """Place a pending stop/limit order (e.g. BUY_STOP, SELL_STOP) via local MT5 terminal."""
+    mt5 = _ensure_mt5()
+
+    symbol = _ensure_symbol_visible(pair)
+    symbol_info = mt5.symbol_info(symbol)
+    if not symbol_info:
+        return {"success": False, "error": f"Symbol {pair} not found"}
+
+    ot_str = order_type.upper().replace(" ", "_")
+    if ot_str in ("BUY_STOP", "BUYSTOP"):
+        mt5_type = mt5.ORDER_TYPE_BUY_STOP
+    elif ot_str in ("SELL_STOP", "SELLSTOP"):
+        mt5_type = mt5.ORDER_TYPE_SELL_STOP
+    elif ot_str in ("BUY_LIMIT", "BUYLIMIT"):
+        mt5_type = mt5.ORDER_TYPE_BUY_LIMIT
+    elif ot_str in ("SELL_LIMIT", "SELLLIMIT"):
+        mt5_type = mt5.ORDER_TYPE_SELL_LIMIT
+    else:
+        return {"success": False, "error": f"Unsupported pending order type: {order_type}"}
+
+    filling = mt5.ORDER_FILLING_RETURN
+    if hasattr(symbol_info, "filling_mode") and symbol_info.filling_mode:
+        if symbol_info.filling_mode & 2:
+            filling = mt5.ORDER_FILLING_IOC
+        elif symbol_info.filling_mode & 1:
+            filling = mt5.ORDER_FILLING_FOK
+
+    request = {
+        "action": mt5.TRADE_ACTION_PENDING,
+        "symbol": symbol,
+        "volume": float(volume),
+        "type": mt5_type,
+        "price": float(price),
+        "sl": float(stop_loss) if stop_loss else 0.0,
+        "tp": float(take_profit) if take_profit else 0.0,
+        "deviation": 10,
+        "magic": int(magic),
+        "comment": comment[:31],
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": filling,
+    }
+
+    result = mt5.order_send(request)
+    if result and result.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+        return {"ticket": result.order, "success": True, "price": price}
+
+    # Retry if filling mode rejected
+    if result and result.retcode == 10030:
+        for alt_fill in [mt5.ORDER_FILLING_RETURN, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK]:
+            if alt_fill != filling:
+                request["type_filling"] = alt_fill
+                retry_res = mt5.order_send(request)
+                if retry_res and retry_res.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+                    return {"ticket": retry_res.order, "success": True, "price": price}
+
+    error = mt5.last_error() if result is None else _retcode_message(result.retcode)
+    return {"success": False, "error": str(error)}
+
+
+async def delete_pending_order(ticket: int) -> dict:
+    """Delete a pending order by its ticket number."""
+    mt5 = _ensure_mt5()
+    request = {
+        "action": mt5.TRADE_ACTION_REMOVE,
+        "order": int(ticket),
+    }
+    result = mt5.order_send(request)
+    if result and result.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+        return {"success": True, "ticket": int(ticket)}
+    error = mt5.last_error() if result is None else _retcode_message(result.retcode)
+    return {"success": False, "error": str(error)}
+
+
+async def get_pending_orders(symbol: str = None, magic: int = None) -> list:
+    """Get active pending orders for a symbol and/or magic number."""
+    mt5 = _ensure_mt5()
+    orders = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
+    if not orders:
+        return []
+    out = []
+    for o in orders:
+        if magic is not None and getattr(o, "magic", None) != magic:
+            continue
+        ot = getattr(o, "type", None)
+        type_str = "BUY_STOP" if ot == mt5.ORDER_TYPE_BUY_STOP else \
+                   "SELL_STOP" if ot == mt5.ORDER_TYPE_SELL_STOP else \
+                   "BUY_LIMIT" if ot == mt5.ORDER_TYPE_BUY_LIMIT else \
+                   "SELL_LIMIT" if ot == mt5.ORDER_TYPE_SELL_LIMIT else str(ot)
+        out.append({
+            "ticket": o.ticket,
+            "symbol": o.symbol,
+            "type": type_str,
+            "volume": o.volume_current,
+            "price_open": o.price_open,
+            "sl": o.sl,
+            "tp": o.tp,
+            "magic": o.magic,
+            "comment": getattr(o, "comment", ""),
+        })
+    return out
+

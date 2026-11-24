@@ -73,6 +73,9 @@ def _get_strategy(strategy_name: str, bot_config: dict = None) -> Optional:
         elif strategy_name in ("trading_agents", "ai_committee"):
             from app.services.strategies.trading_agents_strategy import TradingAgentsStrategy
             _strategy_instances[key] = TradingAgentsStrategy()
+        elif strategy_name == "pipstep_reversal":
+            from app.services.strategies.pipstep_reversal import PipStepReversalBot
+            _strategy_instances[key] = PipStepReversalBot()
         else:
             # Custom strategy added via the admin panel (file-backed store, trusted code)
             from app.services import strategy_store
@@ -87,6 +90,7 @@ def _get_poll_interval(strategy: str) -> int:
         "scalp": 15,
         "signal_strength_hedge": 15,
         "nyao_scalper": 10,
+        "pipstep_reversal": 3,
         "smart_money": 60,
         "mmc_mirror": 60,
         "mirror": 60,
@@ -123,6 +127,8 @@ async def start_bot(bot_id: str):
         task = asyncio.create_task(_bot_loop_signal_strength_hedge(bot_id))
     elif strategy_name == "nyao_scalper":
         task = asyncio.create_task(_bot_loop_nyao_scalper(bot_id))
+    elif strategy_name == "pipstep_reversal":
+        task = asyncio.create_task(_bot_loop_pipstep_reversal(bot_id))
     else:
         task = asyncio.create_task(_bot_loop(bot_id))
     _running_bots[bot_id] = task
@@ -948,5 +954,264 @@ async def _bot_loop_nyao_scalper(bot_id: str):
         try:
             supabase.table("bot_settings").update({"status": "error"}).eq("id", bot_id).execute()
         except Exception as e:
-
             logger.error(f'Database operation failed: {e}')
+
+
+async def _bot_loop_pipstep_reversal(bot_id: str):
+    """
+    Dedicated loop for PipStepReversalBot:
+      - BuyStop + SellStop pair
+      - Step trailing SL (1 step -> BE, 2 steps -> BE + 1 step, etc.)
+      - Delete opposite pending stop when position triggers
+      - Reverse immediately on SL hit (DEAL_REASON_SL)
+      - Daily risk stop and profit target
+    """
+    from app.services.strategies.pipstep_reversal import PipStepReversalBot
+    from uuid import uuid4
+
+    bot = PipStepReversalBot()
+    _config_loaded = False
+
+    try:
+        while True:
+            result = supabase.table("bot_settings").select("*").eq("id", bot_id).single().execute()
+            if not result.data or result.data.get("status") != "running":
+                break
+
+            bot_cfg = result.data
+            pair = bot_cfg["pair"]
+            account_id = bot_cfg.get("account_id", "")
+            user_id = bot_cfg.get("user_id")
+
+            if not _config_loaded:
+                _config_loaded = True
+                cfg = bot_cfg.get("config", {}) or {}
+                bot.lots = float(cfg.get("lots", bot_cfg.get("lot_size", bot.lots)))
+                bot.entry_pips = float(cfg.get("entry_pips", 10.0))
+                bot.sl_pips = float(cfg.get("sl_pips", bot_cfg.get("stop_loss", 10.0)))
+                bot.step_pips = float(cfg.get("step_pips", 10.0))
+                bot.pip_price = float(cfg.get("pip_price", 0.0))
+                bot.max_spread_pips = float(cfg.get("max_spread_pips", 0.0))
+                bot.deviation_pips = float(cfg.get("deviation_pips", 3.0))
+                bot.daily_loss_pct = float(cfg.get("daily_loss_pct", bot_cfg.get("max_daily_loss", 10.0)))
+                bot.daily_profit_pct = float(cfg.get("daily_profit_pct", 20.0))
+                bot.magic_number = int(cfg.get("magic_number", 26110401))
+                bot.comment = str(cfg.get("comment", "PIPSTEP"))
+                logger.info(f"[pipstep_reversal {bot_id}] Armed for {pair} (magic={bot.magic_number}, entry={bot.entry_pips}pips, trail={bot.step_pips}pips)")
+
+            # 1. MT5 Terminal & Symbol pre-flight
+            acc_info = await mt5.get_account_info(account_id)
+            equity = float(acc_info.get("equity", 0.0)) if acc_info else 0.0
+
+            # Daily risk update & check
+            bot.update_day(equity)
+            limit_breached = bot.check_daily_limits(equity)
+            if limit_breached:
+                logger.warning(f"[pipstep_reversal {bot_id}] {limit_breached}. Closing positions and halting.")
+                bot.state = "HALTED"
+                # Clean pendings & positions
+                pendings = await mt5.get_pending_orders(magic=bot.magic_number)
+                for p in pendings:
+                    await mt5.delete_pending_order(p["ticket"])
+                positions = await mt5.get_positions(account_id)
+                for pos in positions:
+                    if pos.get("magic") == bot.magic_number or _symbols_match(pos.get("symbol", ""), pair):
+                        await mt5.close_position(account_id, str(pos["ticket"]))
+                await asyncio.sleep(60)
+                continue
+
+            if bot.state == "HALTED":
+                await asyncio.sleep(30)
+                continue
+
+            # Query live tick
+            mod = mt5._ensure_mt5()
+            resolved = mt5._ensure_symbol_visible(pair)
+            tick = mod.symbol_info_tick(resolved)
+            sym_info = mod.symbol_info(resolved)
+            if tick is None or sym_info is None:
+                await asyncio.sleep(2)
+                continue
+
+            digits = getattr(sym_info, "digits", 5)
+            pip_unit = bot.detect_pip(resolved, digits)
+            spread = tick.ask - tick.bid
+
+            if bot.max_spread_pips > 0 and spread > (bot.max_spread_pips * pip_unit):
+                logger.debug(f"[pipstep_reversal {bot_id}] Spread {spread/pip_unit:.1f} exceeds max {bot.max_spread_pips}. Waiting.")
+                await asyncio.sleep(2)
+                continue
+
+            # 2. Check active positions for this pair & magic
+            positions = await mt5.get_positions(account_id)
+            my_positions = [
+                p for p in positions
+                if (p.get("magic") == bot.magic_number or getattr(p, "magic", None) == bot.magic_number)
+                and _symbols_match(p.get("symbol", ""), pair)
+            ]
+
+            # --- CASE A: POSITION IS ACTIVE ---
+            if my_positions:
+                pos = my_positions[0]
+                pos_ticket = pos["ticket"]
+                pos_dir = 1 if pos["type"].upper() == "BUY" else -1
+                pos_open = float(pos["open_price"])
+                cur_sl = float(pos.get("stop_loss", 0.0))
+
+                if bot.state != "IN_TRADE":
+                    bot.state = "IN_TRADE"
+                    bot.pos_id = pos_ticket
+                    bot.last_dir = pos_dir
+                    logger.info(f"[pipstep_reversal {bot_id}] Position #{pos_ticket} active ({pos['type']}). Cancelling pending orders.")
+                    # Delete opposite pending orders
+                    pendings = await mt5.get_pending_orders(magic=bot.magic_number)
+                    for p in pendings:
+                        await mt5.delete_pending_order(p["ticket"])
+
+                # Manage Step Trailing Stop
+                cur_price = tick.bid if pos_dir > 0 else tick.ask
+                desired_sl = bot.calculate_step_trailing_sl(pos_dir, pos_open, cur_sl, cur_price, pip_unit)
+                if desired_sl is not None:
+                    desired_sl_norm = round(desired_sl, digits)
+                    if cur_sl == 0.0 or abs(desired_sl_norm - cur_sl) >= (pip_unit * 0.5):
+                        mod_res = await mt5.modify_sl_tp(account_id, str(pos_ticket), stop_loss=desired_sl_norm)
+                        if mod_res.get("success"):
+                            logger.info(f"[pipstep_reversal {bot_id}] Trailing SL moved to {desired_sl_norm} for #{pos_ticket}")
+
+                await asyncio.sleep(2)
+                continue
+
+            # --- CASE B: NO POSITION ACTIVE ---
+            # Did a position just close?
+            if bot.state == "IN_TRADE":
+                # Classify close reason from history deal
+                reason = await mt5.get_history_deal_reason(bot.pos_id)
+                # DEAL_REASON_SL = 4 (or 5 depending on build)
+                is_sl_hit = (reason == 4 or reason == 5)
+                if is_sl_hit:
+                    bot.next_dir = -bot.last_dir
+                    bot.state = "NEED_REVERSAL"
+                    bot.reversals_count += 1
+                    logger.info(f"[pipstep_reversal {bot_id}] SL hit on position #{bot.pos_id}! Triggering instant reversal #{bot.reversals_count} to {'BUY' if bot.next_dir > 0 else 'SELL'}.")
+                else:
+                    bot.state = "ARMED"
+                    logger.info(f"[pipstep_reversal {bot_id}] Position #{bot.pos_id} closed without SL hit (reason={reason}). Re-arming pending straddle pair.")
+
+            # REVERSAL EXECUTION
+            if bot.state == "NEED_REVERSAL":
+                rev_type = "BUY" if bot.next_dir > 0 else "SELL"
+                price = tick.ask if bot.next_dir > 0 else tick.bid
+                sl_dist = bot.sl_pips * pip_unit
+                sl_price = round(price - bot.next_dir * sl_dist, digits)
+
+                order_res = await mt5.place_order(
+                    account_id=account_id,
+                    pair=resolved,
+                    order_type=rev_type,
+                    volume=bot.lots,
+                    stop_loss=sl_price,
+                    take_profit=0.0,
+                    comment=f"{bot.comment} Rev#{bot.reversals_count}"
+                )
+
+                if order_res.get("success"):
+                    bot.state = "IN_TRADE"
+                    bot.last_dir = bot.next_dir
+                    bot.pos_id = order_res.get("ticket")
+                    logger.info(f"[pipstep_reversal {bot_id}] Reversal order #{bot.pos_id} executed @ {price} with SL {sl_price}!")
+
+                    # Record trade in Supabase
+                    try:
+                        trade = {
+                            "id": str(uuid4()),
+                            "user_id": user_id,
+                            "account_id": account_id,
+                            "bot_id": bot_id,
+                            "strategy": "pipstep_reversal",
+                            "symbol": resolved,
+                            "direction": rev_type.lower(),
+                            "volume": bot.lots,
+                            "open_price": price,
+                            "stop_loss": sl_price,
+                            "take_profit": 0.0,
+                            "status": "open",
+                            "reason": f"PipStep Reversal #{bot.reversals_count}",
+                            "opened_at": datetime.utcnow().isoformat(),
+                            "ticket": str(order_res.get("ticket")),
+                        }
+                        supabase.table("trades").insert(trade).execute()
+                    except Exception as ins_err:
+                        logger.error(f"Failed to record reversal trade: {ins_err}")
+
+                await asyncio.sleep(2)
+                continue
+
+            # ARMED: Ensure symmetrical BuyStop + SellStop pending pair
+            if bot.state == "ARMED":
+                pendings = await mt5.get_pending_orders(symbol=resolved, magic=bot.magic_number)
+                buy_stops = [p for p in pendings if "BUY" in p["type"]]
+                sell_stops = [p for p in pendings if "SELL" in p["type"]]
+
+                if len(buy_stops) == 1 and len(sell_stops) == 1:
+                    # Symmetrical pair already placed and waiting
+                    await asyncio.sleep(2)
+                    continue
+
+                if len(pendings) > 0:
+                    # Incomplete set -> clean and replace symmetrically
+                    for p in pendings:
+                        await mt5.delete_pending_order(p["ticket"])
+                    await asyncio.sleep(1)
+
+                # Place BuyStop + SellStop pair
+                dist = bot.entry_pips * pip_unit
+                sl_dist = bot.sl_pips * pip_unit
+
+                buy_p = round(tick.ask + dist, digits)
+                sell_p = round(tick.bid - dist, digits)
+                buy_sl = round(buy_p - sl_dist, digits)
+                sell_sl = round(sell_p + sl_dist, digits)
+
+                res1 = await mt5.place_pending_order(
+                    account_id=account_id,
+                    pair=resolved,
+                    order_type="BUY_STOP",
+                    volume=bot.lots,
+                    price=buy_p,
+                    stop_loss=buy_sl,
+                    take_profit=0.0,
+                    magic=bot.magic_number,
+                    comment=bot.comment
+                )
+
+                if res1.get("success"):
+                    res2 = await mt5.place_pending_order(
+                        account_id=account_id,
+                        pair=resolved,
+                        order_type="SELL_STOP",
+                        volume=bot.lots,
+                        price=sell_p,
+                        stop_loss=sell_sl,
+                        take_profit=0.0,
+                        magic=bot.magic_number,
+                        comment=bot.comment
+                    )
+                    if not res2.get("success"):
+                        # Keep symmetric: delete buy stop if sell stop failed
+                        await mt5.delete_pending_order(res1["ticket"])
+                        logger.warning(f"[pipstep_reversal {bot_id}] SellStop failed: {res2.get('error')}")
+                    else:
+                        logger.info(f"[pipstep_reversal {bot_id}] Symmetrical pair placed: BuyStop @ {buy_p} (SL {buy_sl}), SellStop @ {sell_p} (SL {sell_sl})")
+                else:
+                    logger.warning(f"[pipstep_reversal {bot_id}] BuyStop failed: {res1.get('error')}")
+
+            await asyncio.sleep(2)
+
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.error(f"[pipstep_reversal {bot_id}] Fatal: {e}")
+        try:
+            supabase.table("bot_settings").update({"status": "error"}).eq("id", bot_id).execute()
+        except Exception as db_e:
+            logger.error(f"Database error: {db_e}")

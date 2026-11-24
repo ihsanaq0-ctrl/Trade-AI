@@ -16,7 +16,8 @@ export const BUILTIN_STRATEGIES = [
   { name: 'scalp_fvg', title: 'Scalp (FVG)', risk: 'High', description: 'Rapid M1-M5 imbalance filling and mean reversion' },
   { name: 'signal_strength_hedge', title: 'Signal Strength Hedge', risk: 'High', description: 'Dynamic directional delta hedging across correlated pairs' },
   { name: 'nyao_scalper', title: 'Nyao Scalper (Trade Mgmt)', risk: 'Medium', description: 'Dynamic trailing stop, breakeven protection & partial take profit' },
-  { name: 'trading_agents', title: 'TradingAgents AI', risk: 'Adaptive', description: 'Multi-agent LLM consensus: Technical, Macro, Sentiment & Risk' }
+  { name: 'trading_agents', title: 'TradingAgents AI', risk: 'Adaptive', description: 'Multi-agent LLM consensus: Technical, Macro, Sentiment & Risk' },
+  { name: 'pipstep_reversal', title: 'PipStep Reversal EA', risk: 'Medium', description: 'BuyStop/SellStop straddle pair, step trailing SL & instant reversal on SL hit' }
 ]
 
 export default function Bot({ session }) {
