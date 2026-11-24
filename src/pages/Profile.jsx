@@ -27,10 +27,18 @@ export default function Profile({ session }) {
   const [saving, setSaving] = useState(false)
   const [accountsCount, setAccountsCount] = useState(0)
   const [activeAccount, setActiveAccount] = useState(null)
+  const [currentPlan, setCurrentPlan] = useState('free')
 
   useEffect(() => {
     if (!session?.access_token) return
     const headers = { 'Authorization': `Bearer ${session.access_token}` }
+
+    // Fetch license/plan info
+    api.get('/api/payments/license', { headers })
+      .then(d => {
+        if (d && d.plan) setCurrentPlan(d.plan.toLowerCase())
+      })
+      .catch(() => setCurrentPlan('free'))
 
     // Fetch accounts info
     api.get('/api/accounts', { headers })
@@ -267,15 +275,16 @@ export default function Profile({ session }) {
                 <Sparkles size={11} /> {userRole}
               </span>
               <span style={{
-                background: 'rgba(59, 91, 245, 0.12)',
-                border: '1px solid rgba(59, 91, 245, 0.25)',
-                color: '#818cf8',
+                background: currentPlan === 'elite' ? 'rgba(245, 158, 11, 0.15)' : currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                border: `1px solid ${currentPlan === 'elite' ? 'rgba(245, 158, 11, 0.3)' : currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`,
+                color: currentPlan === 'elite' ? '#f59e0b' : currentPlan === 'pro' ? '#00d4ff' : '#10b981',
                 padding: '3px 10px',
                 borderRadius: '20px',
                 fontSize: '11px',
-                fontWeight: 600
+                fontWeight: 700,
+                letterSpacing: '0.04em'
               }}>
-                PRO PLAN
+                {currentPlan.toUpperCase()} PLAN
               </span>
             </div>
 
@@ -575,61 +584,163 @@ export default function Profile({ session }) {
         </div>
       </div>
 
-      {/* Subscription Features Card */}
+      {/* Membership & Subscription Plans */}
       <div style={cardStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <div>
-            <h3 style={{ fontSize: '15px', fontWeight: '700', color: '#ffffff', margin: 0 }}>
-              Included PRO Tier Features
+            <h3 style={{ fontSize: '16px', fontWeight: '700', color: '#ffffff', margin: 0 }}>
+              Trading Platform Membership Tiers
             </h3>
             <p style={{ fontSize: '12px', color: '#94a3b8', margin: '3px 0 0 0' }}>
-              Your account has full unlocked access to all advanced capabilities
+              Choose your plan to scale automated algorithmic execution across your MetaTrader accounts
             </p>
           </div>
           <span style={{
-            background: 'rgba(59, 91, 245, 0.15)',
-            border: '1px solid rgba(59, 91, 245, 0.3)',
-            color: '#818cf8',
+            background: currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+            border: `1px solid ${currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`,
+            color: currentPlan === 'pro' ? '#00d4ff' : '#10b981',
             padding: '4px 12px',
             borderRadius: '20px',
             fontSize: '11px',
-            fontWeight: 600
+            fontWeight: 700
           }}>
-            LIFETIME ACCESS
+            CURRENT PLAN: {currentPlan.toUpperCase()}
           </span>
         </div>
 
+        {/* 3 Tier Cards */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-          gap: '12px'
+          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+          gap: '16px'
         }}>
-          {[
-            'All 9 AI Automated Strategies',
-            'TradingAgents 6-Agent Committee',
-            'Real-Time MetaTrader 5 Execution',
-            'Smart Risk Guard & Daily Max Loss',
-            'High-Speed WebSocket Data Streams',
-            'Full Historical Analytics & Export'
-          ].map((feature, idx) => (
-            <div
-              key={idx}
-              style={{
-                background: '#0c0e15',
-                border: '1px solid #1c2233',
-                borderRadius: '10px',
-                padding: '12px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}
-            >
-              <CheckCircle2 size={16} color="#10b981" />
-              <span style={{ fontSize: '12px', color: '#e2e8f0', fontWeight: 500 }}>
-                {feature}
-              </span>
+          {/* FREE PLAN */}
+          <div style={{
+            background: '#0c0e15',
+            border: `1px solid ${currentPlan === 'free' ? 'rgba(16, 185, 129, 0.4)' : '#1c2233'}`,
+            borderRadius: '12px',
+            padding: '20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px',
+            position: 'relative'
+          }}>
+            {currentPlan === 'free' && (
+              <span style={{
+                position: 'absolute', top: '-10px', right: '14px',
+                background: '#10b981', color: '#0c0e15', fontSize: '10px', fontWeight: 800,
+                padding: '2px 8px', borderRadius: '10px'
+              }}>ACTIVE</span>
+            )}
+            <div>
+              <div style={{ fontSize: '15px', fontWeight: '700', color: '#ffffff' }}>Free Starter</div>
+              <div style={{ fontSize: '22px', fontWeight: '800', color: '#10b981', margin: '6px 0 2px 0' }}>$0 <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>/ forever</span></div>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Basic algorithmic trading & manual station</p>
             </div>
-          ))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#94a3b8' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#10b981" />
+                <span><strong>1 Active Bot</strong> running at a time</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#10b981" />
+                <span>Classic Mode & Smart Money access</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#10b981" />
+                <span>Full Manual Trading Station</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#10b981" />
+                <span>Live MetaTrader 5 broker sync</span>
+              </div>
+            </div>
+          </div>
+
+          {/* PRO PLAN */}
+          <div style={{
+            background: 'linear-gradient(180deg, rgba(0, 212, 255, 0.05) 0%, #0c0e15 100%)',
+            border: `1px solid ${currentPlan === 'pro' ? '#00d4ff' : 'rgba(0, 212, 255, 0.35)'}`,
+            borderRadius: '12px',
+            padding: '20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px',
+            position: 'relative',
+            boxShadow: '0 0 25px rgba(0, 212, 255, 0.08)'
+          }}>
+            <span style={{
+              position: 'absolute', top: '-10px', right: '14px',
+              background: '#00d4ff', color: '#0c0e15', fontSize: '10px', fontWeight: 800,
+              padding: '2px 8px', borderRadius: '10px'
+            }}>POPULAR</span>
+            <div>
+              <div style={{ fontSize: '15px', fontWeight: '700', color: '#00d4ff' }}>Pro Trader</div>
+              <div style={{ fontSize: '22px', fontWeight: '800', color: '#ffffff', margin: '6px 0 2px 0' }}>$29 <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>/ month</span></div>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Unlocks PipStep Reversal EA & multi-bot execution</p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#cbd5e1' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#00d4ff" />
+                <span><strong style={{ color: '#00d4ff' }}>PipStep Reversal EA</strong> (Full Access)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#00d4ff" />
+                <span>Symmetrical BuyStop / SellStop Straddle</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#00d4ff" />
+                <span>Dynamic Step Trailing SL & Reversal</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#00d4ff" />
+                <span>Up to <strong>3 Active Bots</strong> simultaneously</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#00d4ff" />
+                <span>Priority risk control & daily equity cap</span>
+              </div>
+            </div>
+          </div>
+
+          {/* ELITE PLAN */}
+          <div style={{
+            background: '#0c0e15',
+            border: '1px solid rgba(245, 158, 11, 0.3)',
+            borderRadius: '12px',
+            padding: '20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px',
+            opacity: 0.85
+          }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: '15px', fontWeight: '700', color: '#f59e0b' }}>Elite VIP</div>
+                <span style={{ fontSize: '10px', color: '#f59e0b', background: 'rgba(245, 158, 11, 0.15)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>COMING SOON</span>
+              </div>
+              <div style={{ fontSize: '22px', fontWeight: '800', color: '#ffffff', margin: '6px 0 2px 0' }}>$79 <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>/ month</span></div>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Advanced AI consensus & multi-pair hedging</p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#94a3b8' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#f59e0b" />
+                <span><strong>Other Advanced Bots</strong> (In development)</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#f59e0b" />
+                <span>TradingAgents 6-Agent Committee</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#f59e0b" />
+                <span>Signal Strength Delta Hedging</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CheckCircle2 size={14} color="#f59e0b" />
+                <span>Unlimited concurrent bot instances</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -79,6 +79,45 @@ async def start_bot(bot_id: str, user=Depends(get_current_user)):
         if result.data["status"] == "running":
             return {"success": True, "message": "Bot already running"}
 
+        # Verify User Plan & Tier Quota Limits
+        user_plan = "free"
+        try:
+            sub_res = supabase.table("subscriptions").select("plan").eq("user_id", user["sub"]).eq("status", "active").limit(1).execute()
+            if sub_res.data and sub_res.data[0].get("plan"):
+                user_plan = sub_res.data[0]["plan"].lower()
+            else:
+                prof_res = supabase.table("profiles").select("plan").eq("id", user["sub"]).limit(1).execute()
+                if prof_res.data and prof_res.data[0].get("plan"):
+                    user_plan = prof_res.data[0]["plan"].lower()
+        except Exception:
+            user_plan = "free"
+
+        strategy_name = result.data.get("strategy", "").lower()
+
+        # Free Tier Rules:
+        # 1) Max 1 active bot running
+        # 2) PipStep Reversal EA requires Pro
+        if user_plan == "free":
+            running_bots = supabase.table("bot_settings").select("id").eq("user_id", user["sub"]).eq("status", "running").execute()
+            if running_bots.data and len(running_bots.data) >= 1:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Free Tier Limit: You can only run 1 active bot simultaneously. Please stop your running bot or upgrade to Pro to run multiple bots."
+                )
+            if strategy_name == "pipstep_reversal":
+                raise HTTPException(
+                    status_code=403,
+                    detail="PipStep Reversal EA is a PRO feature. Please upgrade to the Pro Plan to unlock this strategy."
+                )
+
+        # Elite Only Rules:
+        ELITE_ONLY_STRATEGIES = {"trading_agents", "ai_committee", "signal_strength_hedge"}
+        if strategy_name in ELITE_ONLY_STRATEGIES and user_plan != "elite":
+            raise HTTPException(
+                status_code=403,
+                detail="This strategy is reserved for the Elite Plan (Coming Soon). It is currently locked."
+            )
+
         # Verify user has an active connected broker account
         acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
         if not acc_res.data:

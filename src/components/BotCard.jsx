@@ -63,6 +63,14 @@ export default function BotCard({ strategy, title, description, risk, color, isR
   const riskInfo = risk ? { label: risk, color: accent } :
     (riskLevels[strategy] || { label: 'Custom', color: accent })
 
+  const isElite = ['trading_agents', 'signal_strength_hedge', 'ai_committee'].includes(strategy)
+  const isPro = strategy === 'pipstep_reversal'
+  const tierInfo = isPro
+    ? { label: 'PRO PLAN', color: '#00d4ff', bg: 'rgba(0, 212, 255, 0.12)', border: 'rgba(0, 212, 255, 0.3)' }
+    : isElite
+    ? { label: 'ELITE (SOON)', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)', border: 'rgba(245, 158, 11, 0.3)' }
+    : { label: 'FREE TIER', color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)', border: 'rgba(16, 185, 129, 0.3)' }
+
   const styles = {
     card: {
       background: '#0d1117',
@@ -115,7 +123,22 @@ export default function BotCard({ strategy, title, description, risk, color, isR
           <Icon size={20} color={accent} />
         </div>
         <div style={styles.name}>{name}</div>
-        <div style={styles.riskBadge}>{riskInfo.label} Risk</div>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <span style={{
+            fontSize: '10px',
+            fontWeight: '700',
+            letterSpacing: '0.04em',
+            color: tierInfo.color,
+            background: tierInfo.bg,
+            border: `1px solid ${tierInfo.border}`,
+            padding: '2px 7px',
+            borderRadius: '6px',
+            whiteSpace: 'nowrap'
+          }}>
+            {tierInfo.label}
+          </span>
+          <div style={styles.riskBadge}>{riskInfo.label}</div>
+        </div>
       </div>
       {description && (
         <div style={{ fontSize: 12, color: '#8b949e', marginTop: -4, marginBottom: 4, lineHeight: 1.4 }}>
@@ -124,13 +147,13 @@ export default function BotCard({ strategy, title, description, risk, color, isR
       )}
       <div>
         <span style={styles.statusDot}></span>
-        <span style={styles.statusText}>{isRunning ? 'Running' : 'Stopped'}</span>
+        <span style={styles.statusText}>{isRunning ? 'Running' : (isElite ? 'Locked (Elite)' : 'Stopped')}</span>
       </div>
       <div style={styles.actions}>
-        <button style={{ ...styles.btn, ...styles.startBtn }}
+        <button style={{ ...styles.btn, ...styles.startBtn, opacity: isElite ? 0.6 : 1 }}
           onClick={e => { e.stopPropagation(); isRunning ? onStop() : onStart() }}>
           {isRunning ? <Square size={14} /> : <Play size={14} />}
-          {isRunning ? 'Stop' : 'Start'}
+          {isRunning ? 'Stop' : (isElite ? 'Elite Only' : 'Start')}
         </button>
         <button style={{ ...styles.btn, ...styles.configBtn }}
           onClick={e => { e.stopPropagation(); onConfigure() }}>

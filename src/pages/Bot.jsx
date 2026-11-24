@@ -32,6 +32,7 @@ export default function Bot({ session }) {
   const [accountInfo, setAccountInfo] = useState(null)
   const [apiError, setApiError] = useState(null)
   const [winRate, setWinRate] = useState(null)
+  const [userPlan, setUserPlan] = useState('free')
   const toast = useToast()
   const pollRef = useRef(null)
 
@@ -41,6 +42,13 @@ export default function Bot({ session }) {
       return
     }
     const headers = { 'Authorization': `Bearer ${session.access_token}` }
+
+    // Check user subscription tier
+    api.get('/api/payments/license', { headers })
+      .then(d => {
+        if (d && d.plan) setUserPlan(d.plan.toLowerCase())
+      })
+      .catch(() => setUserPlan('free'))
 
     // Check backend health
     api.checkHealth().then(h => setBackendOnline(h.ok)).catch(() => setBackendOnline(false))
@@ -92,6 +100,26 @@ export default function Bot({ session }) {
       toast.error('Backend API is offline. Start it with: cd backend && uvicorn main:app --port 8002 --reload')
       return
     }
+
+    // Elite lock rule: other bot not ready for now
+    if (['trading_agents', 'signal_strength_hedge', 'ai_committee'].includes(strategy)) {
+      toast.info('🔒 This strategy is exclusive to the Elite Plan (Coming Soon). It is currently locked.')
+      return
+    }
+
+    // Pro lock rule: PipStep Reversal EA requires Pro
+    if (strategy === 'pipstep_reversal' && userPlan === 'free') {
+      toast.warn('⭐ PipStep Reversal EA requires the PRO Plan. Upgrade to Pro to activate this high-frequency straddle bot.')
+      return
+    }
+
+    // Free limit rule: only 1 bot can run
+    const runningCount = activeBots.filter(b => b.status === 'running').length
+    if (userPlan === 'free' && runningCount >= 1) {
+      toast.warn('⚠️ Free Plan Limit: You can only run 1 active bot simultaneously. Please stop your running bot or upgrade to Pro.')
+      return
+    }
+
     setSelectedStrategy(strategy)
     setModalInitialConfig(null)
     setShowModal(true)
