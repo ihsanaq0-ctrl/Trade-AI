@@ -9,13 +9,37 @@ from datetime import datetime
 
 router = APIRouter(prefix="/api/bots", tags=["bots"])
 
+# Fallback strategy column values when older DB `bot_settings_strategy_check`
+# constraint hasn't yet run migration 006. Real strategy is preserved in config._actual_strategy.
+_DB_STRATEGY_FALLBACKS = {
+    "pipstep_reversal": "scalp",
+    "mmc_mirror": "mirror",
+    "trading_agents": "smart_money",
+    "ai_committee": "smart_money",
+}
+
+
+def _resolve_strategy_name(bot_row: dict) -> str:
+    cfg = bot_row.get("config") or {}
+    if isinstance(cfg, dict) and cfg.get("_actual_strategy"):
+        return str(cfg["_actual_strategy"]).lower()
+    return str(bot_row.get("strategy") or "").lower()
+
+
+def _normalize_bot(bot_row: dict) -> dict:
+    if not bot_row:
+        return bot_row
+    out = dict(bot_row)
+    out["strategy"] = _resolve_strategy_name(bot_row)
+    return out
+
 
 @router.get("")
 async def list_bots(user=Depends(get_current_user)):
     result = await asyncio.to_thread(
         lambda: supabase.table("bot_settings").select("*").eq("user_id", user["sub"]).execute()
     )
-    return result.data or []
+    return [_normalize_bot(b) for b in (result.data or [])]
 
 
 @router.post("")
@@ -29,6 +53,7 @@ async def create_bot(data: BotCreate, user=Depends(get_current_user)):
             if acc_res.data:
                 account_id = acc_res.data[0]["id"]
 
+        cfg = dict(data.config or {})
         bot = {
             "id": str(uuid4()),
             "user_id": user["sub"],
@@ -42,22 +67,29 @@ async def create_bot(data: BotCreate, user=Depends(get_current_user)):
             "stop_loss": data.stop_loss,
             "max_trades": data.max_trades,
             "max_daily_loss": data.max_daily_loss,
-            "config": data.config,
+            "config": cfg,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat()
         }
-        result = await asyncio.to_thread(
-            lambda: supabase.table("bot_settings").insert(bot).execute()
-        )
-        return result.data[0] if result.data else bot
-    except Exception as e:
-        msg = str(e)
-        if "bot_settings_strategy_check" in msg:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Database schema needs migration for '{data.strategy}'. Please run supabase/migrations/006_add_pipstep_reversal_and_security.sql in your Supabase SQL Editor."
+        try:
+            result = await asyncio.to_thread(
+                lambda: supabase.table("bot_settings").insert(bot).execute()
             )
-        raise HTTPException(status_code=400, detail=msg)
+            return _normalize_bot(result.data[0] if result.data else bot)
+        except Exception as ins_err:
+            if "bot_settings_strategy_check" in str(ins_err):
+                # Graceful fallback for DBs pending 006_add_pipstep_reversal_and_security.sql:
+                # store real strategy in config._actual_strategy and map DB column to an allowed alias.
+                fallback_col = _DB_STRATEGY_FALLBACKS.get(data.strategy.lower(), "scalp")
+                cfg["_actual_strategy"] = data.strategy
+                bot_fallback = {**bot, "strategy": fallback_col, "config": cfg}
+                result = await asyncio.to_thread(
+                    lambda: supabase.table("bot_settings").insert(bot_fallback).execute()
+                )
+                return _normalize_bot(result.data[0] if result.data else bot_fallback)
+            raise ins_err
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{bot_id}")
@@ -67,18 +99,28 @@ async def get_bot(bot_id: str, user=Depends(get_current_user)):
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="Bot not found")
-    return result.data
+    return _normalize_bot(result.data)
 
 
 @router.put("/{bot_id}")
 async def update_bot(bot_id: str, data: BotUpdate, user=Depends(get_current_user)):
     try:
         updates = {k: v for k, v in data.dict().items() if v is not None}
+        # Preserve _actual_strategy if present in existing config
+        existing_res = await asyncio.to_thread(
+            lambda: supabase.table("bot_settings").select("config").eq("id", bot_id).eq("user_id", user["sub"]).single().execute()
+        )
+        existing_cfg = (existing_res.data or {}).get("config") or {}
+        if isinstance(existing_cfg, dict) and existing_cfg.get("_actual_strategy"):
+            merged_cfg = {**existing_cfg, **(updates.get("config") or {})}
+            merged_cfg["_actual_strategy"] = existing_cfg["_actual_strategy"]
+            updates["config"] = merged_cfg
+
         updates["updated_at"] = datetime.utcnow().isoformat()
         result = await asyncio.to_thread(
             lambda: supabase.table("bot_settings").update(updates).eq("id", bot_id).eq("user_id", user["sub"]).execute()
         )
-        return result.data[0] if result.data else {"success": True}
+        return _normalize_bot(result.data[0]) if result.data else {"success": True}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -106,7 +148,6 @@ async def start_bot(bot_id: str, user=Depends(get_current_user)):
         if result.data["status"] == "running":
             return {"success": True, "message": "Bot already running"}
 
-        # Check plan & connected account concurrently
         def _get_sub():
             return supabase.table("subscriptions").select("plan").eq("user_id", user["sub"]).eq("status", "active").limit(1).execute()
 
@@ -132,7 +173,7 @@ async def start_bot(bot_id: str, user=Depends(get_current_user)):
         elif prof_res.data and prof_res.data[0].get("plan"):
             user_plan = prof_res.data[0]["plan"].lower()
 
-        strategy_name = result.data.get("strategy", "").lower()
+        strategy_name = _resolve_strategy_name(result.data)
 
         if user_plan == "free":
             running_bots = await asyncio.to_thread(

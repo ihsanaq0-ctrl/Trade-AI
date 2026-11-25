@@ -166,8 +166,9 @@ async def start_bot(bot_id: str):
             pass
 
     # Check if this is a pyramid bot — needs a position-aware loop
-    result = supabase.table("bot_settings").select("strategy").eq("id", bot_id).single().execute()
-    strategy_name = result.data.get("strategy", "") if result.data else ""
+    result = supabase.table("bot_settings").select("strategy, config").eq("id", bot_id).single().execute()
+    cfg = (result.data.get("config") or {}) if result.data else {}
+    strategy_name = (cfg.get("_actual_strategy") if isinstance(cfg, dict) else None) or (result.data.get("strategy", "") if result.data else "")
 
     if strategy_name == "scalp_pyramid":
         task = asyncio.create_task(_bot_loop_pyramid(bot_id))
@@ -204,7 +205,8 @@ async def _bot_loop(bot_id: str):
                 break
 
             bot = result.data
-            strategy_name = bot["strategy"]
+            cfg_meta = bot.get("config") or {}
+            strategy_name = (cfg_meta.get("_actual_strategy") if isinstance(cfg_meta, dict) else None) or bot["strategy"]
             strategy = _get_strategy(strategy_name, bot.get("config"))
             if not strategy:
                 logger.error(f"Unknown strategy: {strategy_name}")
@@ -307,7 +309,8 @@ async def _bot_loop_mmc(bot_id: str):
                 break
 
             bot = result.data
-            strategy_name = bot["strategy"]
+            cfg_meta = bot.get("config") or {}
+            strategy_name = (cfg_meta.get("_actual_strategy") if isinstance(cfg_meta, dict) else None) or bot["strategy"]
             strategy = _get_strategy(strategy_name, bot.get("config"))
             if not strategy:
                 logger.error(f"Unknown strategy: {strategy_name}")
