@@ -84,7 +84,13 @@ async def gumroad_webhook(request: Request):
 async def check_license(user=Depends(get_current_user)):
     result = supabase.table("subscriptions").select("*").eq("user_id", user["sub"]).eq("status", "active").execute()
     if result.data:
-        return {"plan": "pro", "status": "active", "license_key": result.data[0].get("gumroad_license_key")}
+        return {"plan": result.data[0].get("plan", "pro"), "status": "active", "license_key": result.data[0].get("gumroad_license_key")}
+    try:
+        prof = supabase.table("profiles").select("plan").eq("id", user["sub"]).limit(1).execute()
+        if prof.data and prof.data[0].get("plan"):
+            return {"plan": prof.data[0]["plan"].lower(), "status": "active"}
+    except Exception:
+        pass
     return {"plan": "free", "status": "none"}
 
 @router.post("/validate")

@@ -40,6 +40,12 @@ class TradingAgentsStrategy(BaseStrategy):
                 "volume": float(row.get("volume", row.get("tick_volume", 0))),
             })
 
+        target_pair = getattr(self, "pair", None) or "EURUSD"
+        if "symbol" in df.columns and len(df["symbol"]) > 0:
+            target_pair = str(df["symbol"].iloc[-1])
+        elif "pair" in df.columns and len(df["pair"]) > 0:
+            target_pair = str(df["pair"].iloc[-1])
+
         # Run deliberation via async loop or sync execution
         try:
             loop = asyncio.get_event_loop()
@@ -49,11 +55,11 @@ class TradingAgentsStrategy(BaseStrategy):
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     deliberation = pool.submit(
                         asyncio.run,
-                        TradingAgentsCommittee.deliberate("ASSET", candles)
+                        TradingAgentsCommittee.deliberate(target_pair, candles)
                     ).result()
             else:
                 deliberation = loop.run_until_complete(
-                    TradingAgentsCommittee.deliberate("ASSET", candles)
+                    TradingAgentsCommittee.deliberate(target_pair, candles)
                 )
         except Exception:
             # Fallback direct computation
