@@ -21,6 +21,8 @@ export default function Analytics({ session }) {
   const [byPair, setByPair] = useState([])
   const [monthly, setMonthly] = useState([])
   const [trades, setTrades] = useState([])
+  const [livePositions, setLivePositions] = useState([])
+  const [floatingPnl, setFloatingPnl] = useState(0)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [apiError, setApiError] = useState(null)
@@ -40,12 +42,12 @@ export default function Analytics({ session }) {
     }
   }, [])
 
-  const loadSummary = useCallback((cancelledRef = { current: false }) => {
+  const loadSummary = useCallback((cancelledRef = { current: false }, silent = false) => {
     if (!session?.access_token) {
       setLoading(false)
       return Promise.resolve()
     }
-    setLoading(true)
+    if (!silent) setLoading(true)
     const headers = { 'Authorization': `Bearer ${session.access_token}` }
     const range = getDateRange(timeframe)
     const params = new URLSearchParams()
@@ -76,9 +78,11 @@ export default function Analytics({ session }) {
         setByPair(Array.isArray(summary?.by_pair) ? summary.by_pair : [])
         setMonthly(Array.isArray(summary?.monthly) ? summary.monthly : [])
         setTrades(Array.isArray(summary?.trades) ? summary.trades : [])
+        setLivePositions(Array.isArray(summary?.live_positions) ? summary.live_positions : [])
+        setFloatingPnl(Number(summary?.floating_pnl || 0))
       })
       .catch(() => {
-        if (cancelledRef.current) return
+        if (cancelledRef.current || silent) return
         setApiError('Backend offline')
         setStats({
           total_trades: 0,
@@ -97,6 +101,7 @@ export default function Analytics({ session }) {
         setByPair([])
         setMonthly([])
         setTrades([])
+        setLivePositions([])
       })
       .finally(() => {
         if (!cancelledRef.current) setLoading(false)
@@ -105,8 +110,12 @@ export default function Analytics({ session }) {
 
   useEffect(() => {
     const ref = { current: false }
-    loadSummary(ref)
-    return () => { ref.current = true }
+    loadSummary(ref, false)
+    const timer = setInterval(() => loadSummary(ref, true), 5000)
+    return () => {
+      ref.current = true
+      clearInterval(timer)
+    }
   }, [loadSummary])
 
   const handleSyncMt5 = async () => {
@@ -347,7 +356,7 @@ export default function Analytics({ session }) {
                 <YAxis
                   stroke="#334155"
                   tick={{ fill: '#64748b', fontSize: 11 }}
-                  tickFormatter={v => `$${(v / 1000000).toFixed(2)}M`}
+                  tickFormatter={v => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${Number(v).toFixed(0)}`}
                 />
                 <Tooltip
                   contentStyle={{ background: '#0d1017', border: '1px solid #252d43', borderRadius: '8px', color: '#fff' }}
@@ -394,11 +403,11 @@ export default function Analytics({ session }) {
           <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', marginTop: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
-              <span style={{ color: '#94a3b8' }}>Winning: <strong>{winLossData[0].value}</strong> ({Math.round(winLossData[0].value / (winLossData[0].value + winLossData[1].value) * 100)}%)</span>
+              <span style={{ color: '#94a3b8' }}>Winning: <strong>{winLossData[0].value}</strong> ({(winLossData[0].value + winLossData[1].value) > 0 ? Math.round(winLossData[0].value / (winLossData[0].value + winLossData[1].value) * 100) : 0}%)</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f43f5e' }} />
-              <span style={{ color: '#94a3b8' }}>Losing: <strong>{winLossData[1].value}</strong> ({Math.round(winLossData[1].value / (winLossData[0].value + winLossData[1].value) * 100)}%)</span>
+              <span style={{ color: '#94a3b8' }}>Losing: <strong>{winLossData[1].value}</strong> ({(winLossData[0].value + winLossData[1].value) > 0 ? Math.round(winLossData[1].value / (winLossData[0].value + winLossData[1].value) * 100) : 0}%)</span>
             </div>
           </div>
         </div>
@@ -425,7 +434,7 @@ export default function Analytics({ session }) {
               <BarChart data={byStrategy}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1c2233" vertical={false} />
                 <XAxis dataKey="strategy" stroke="#334155" tick={{ fill: '#64748b', fontSize: 11 }} />
-                <YAxis stroke="#334155" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+                <YAxis stroke="#334155" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={v => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${Number(v).toFixed(0)}`} />
                 <Tooltip contentStyle={{ background: '#0d1017', border: '1px solid #252d43', borderRadius: '8px', color: '#fff' }} />
                 <Bar dataKey="profit" fill="#8b5cf6" radius={[6, 6, 0, 0]} maxBarSize={36} />
               </BarChart>
@@ -448,7 +457,7 @@ export default function Analytics({ session }) {
               <BarChart data={monthly}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1c2233" vertical={false} />
                 <XAxis dataKey="month" stroke="#334155" tick={{ fill: '#64748b', fontSize: 11 }} />
-                <YAxis stroke="#334155" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+                <YAxis stroke="#334155" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={v => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${Number(v).toFixed(0)}`} />
                 <Tooltip contentStyle={{ background: '#0d1017', border: '1px solid #252d43', borderRadius: '8px', color: '#fff' }} />
                 <Bar dataKey="profit" radius={[6, 6, 0, 0]} maxBarSize={32}>
                   {monthly.map((entry, index) => (
@@ -461,6 +470,52 @@ export default function Analytics({ session }) {
         </div>
       </div>
 
+      {/* Live Open MT5 Positions Banner */}
+      {livePositions.length > 0 && (
+        <div style={{
+          background: 'rgba(16, 185, 129, 0.06)',
+          border: '1px solid rgba(16, 185, 129, 0.25)',
+          borderRadius: '18px',
+          padding: '20px'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+            <h2 style={{ fontSize: '15px', fontWeight: '700', color: '#10b981', margin: 0 }}>
+              Live Open MT5 Positions ({livePositions.length})
+            </h2>
+            <span style={{ fontSize: '14px', fontWeight: 800, color: floatingPnl >= 0 ? '#10b981' : '#f43f5e' }}>
+              Floating P&amp;L: {floatingPnl >= 0 ? '+' : ''}${floatingPnl.toFixed(2)}
+            </span>
+          </div>
+          <div className="responsive-table-wrapper">
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ color: '#64748b', borderBottom: '1px solid #1c2233' }}>
+                  {['Ticket', 'Symbol', 'Direction', 'Lots', 'Entry', 'Current', 'SL / TP', 'Floating P&L'].map(h => (
+                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: '600' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {livePositions.map(p => (
+                  <tr key={p.ticket} style={{ borderBottom: '1px solid #161b2a' }}>
+                    <td style={{ padding: '10px 12px', color: '#94a3b8', fontFamily: 'monospace' }}>#{p.ticket}</td>
+                    <td style={{ padding: '10px 12px', fontWeight: 700, color: '#fff' }}>{p.symbol}</td>
+                    <td style={{ padding: '10px 12px', fontWeight: 700, color: p.type === 'BUY' ? '#10b981' : '#f43f5e' }}>{p.type}</td>
+                    <td style={{ padding: '10px 12px', color: '#cbd5e1' }}>{p.volume}</td>
+                    <td style={{ padding: '10px 12px', color: '#cbd5e1' }}>{p.open_price}</td>
+                    <td style={{ padding: '10px 12px', color: '#fff', fontWeight: 600 }}>{p.current_price}</td>
+                    <td style={{ padding: '10px 12px', color: '#94a3b8', fontSize: '11px' }}>{p.stop_loss || '—'} / {p.take_profit || '—'}</td>
+                    <td style={{ padding: '10px 12px', fontWeight: 800, color: Number(p.profit) >= 0 ? '#10b981' : '#f43f5e' }}>
+                      {Number(p.profit) >= 0 ? '+' : ''}${Number(p.profit || 0).toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Trade History Table with Responsive Horizontal Scroll */}
       <div style={{
         background: '#131722',
@@ -469,7 +524,7 @@ export default function Analytics({ session }) {
         padding: '20px'
       }}>
         <h2 style={{ fontSize: '15px', fontWeight: '700', color: '#ffffff', marginBottom: '16px' }}>
-          Historical Trade Log
+          Live &amp; Historical Trade Log
         </h2>
 
         <div className="responsive-table-wrapper">
@@ -489,34 +544,38 @@ export default function Analytics({ session }) {
                   </td>
                 </tr>
               ) : (
-                trades.map((t, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #161b2a' }}>
+                trades.map((t, i) => {
+                  const isBuy = (t.direction || '').toUpperCase() === 'BUY'
+                  const profitNum = Number(t.profit || 0)
+                  return (
+                  <tr key={t.id || t.ticket || i} style={{ borderBottom: '1px solid #161b2a' }}>
                     <td style={{ padding: '12px 14px', color: '#94a3b8' }}>{t.opened_at ? new Date(t.opened_at).toLocaleDateString() : '--'}</td>
                     <td style={{ padding: '12px 14px', fontWeight: '600', color: '#ffffff' }}>{t.symbol || t.pair}</td>
                     <td style={{ padding: '12px 14px' }}>
                       <span style={{
                         padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600',
-                        background: t.direction === 'BUY' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(244, 63, 94, 0.12)',
-                        color: t.direction === 'BUY' ? '#10b981' : '#f43f5e'
+                        background: isBuy ? 'rgba(16, 185, 129, 0.12)' : 'rgba(244, 63, 94, 0.12)',
+                        color: isBuy ? '#10b981' : '#f43f5e'
                       }}>
-                        {t.direction}
+                        {(t.direction || 'BUY').toUpperCase()}
                       </span>
                     </td>
                     <td style={{ padding: '12px 14px', color: '#cbd5e1' }}>{t.volume || t.lot_size || '--'}</td>
                     <td style={{ padding: '12px 14px', color: '#94a3b8' }}>{t.strategy || '--'}</td>
-                    <td style={{ padding: '12px 14px', fontWeight: '700', color: (t.profit || 0) >= 0 ? '#10b981' : '#f43f5e' }}>
-                      {(t.profit || 0) !== 0 ? `${t.profit >= 0 ? '+' : ''}$${t.profit.toFixed(2)}` : '--'}
+                    <td style={{ padding: '12px 14px', fontWeight: '700', color: profitNum >= 0 ? '#10b981' : '#f43f5e' }}>
+                      {profitNum !== 0 ? `${profitNum >= 0 ? '+' : ''}$${profitNum.toFixed(2)}` : '$0.00'}
                     </td>
                     <td style={{ padding: '12px 14px' }}>
                       <span style={{
-                        padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '500',
-                        background: 'rgba(59, 91, 245, 0.12)', color: '#818cf8'
+                        padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600',
+                        background: t.is_live ? 'rgba(16, 185, 129, 0.15)' : 'rgba(59, 91, 245, 0.12)',
+                        color: t.is_live ? '#10b981' : '#818cf8'
                       }}>
-                        {t.status}
+                        {t.is_live ? 'LIVE OPEN' : (t.status || 'open')}
                       </span>
                     </td>
                   </tr>
-                ))
+                )})
               )}
             </tbody>
           </table>

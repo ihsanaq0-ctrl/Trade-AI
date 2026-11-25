@@ -34,8 +34,55 @@ async def list_trades(
             query = query.eq("symbol", target_symbol)
         return query.order("opened_at", desc=True).range(offset, offset + limit - 1).execute()
 
-    result = await asyncio.to_thread(_q)
-    return {"trades": result.data or [], "total": result.count or 0}
+    def _acc():
+        return supabase.table("accounts").select("login").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+
+    result, acc_res, terminal_info = await asyncio.gather(
+        asyncio.to_thread(_q),
+        asyncio.to_thread(_acc),
+        mt5.get_account_info(""),
+    )
+    db_trades = result.data or []
+    user_login = str(acc_res.data[0].get("login", "")).strip() if acc_res.data else ""
+    terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+
+    if offset == 0 and (not status or status == "open") and user_login and user_login == terminal_login:
+        try:
+            positions = await mt5.get_positions("")
+            if symbol or pair:
+                clean = (symbol or pair).replace("/", "").replace(" ", "").strip().upper()
+                positions = [p for p in positions if clean in p.get("symbol", "").upper()]
+            db_by_ticket = {str(t.get("ticket")): t for t in db_trades if t.get("ticket")}
+            seen = set()
+            merged = []
+            for p in positions:
+                t_str = str(p.get("ticket"))
+                seen.add(t_str)
+                db_row = db_by_ticket.get(t_str)
+                merged.append({
+                    "id": db_row.get("id") if db_row else f"mt5-{t_str}",
+                    "ticket": t_str,
+                    "symbol": p.get("symbol"),
+                    "direction": (p.get("type") or "BUY").lower(),
+                    "volume": p.get("volume"),
+                    "open_price": p.get("open_price"),
+                    "current_price": p.get("current_price"),
+                    "profit": round(float(p.get("profit") or 0), 2),
+                    "strategy": (db_row.get("strategy") if db_row else None) or (p.get("comment") or "mt5_live"),
+                    "status": "open",
+                    "opened_at": p.get("time") or (db_row.get("opened_at") if db_row else None),
+                    "is_live": True,
+                })
+            for t in db_trades:
+                ts = str(t.get("ticket") or "")
+                if ts and ts in seen:
+                    continue
+                merged.append(t)
+            return {"trades": merged[:limit], "total": max(result.count or 0, len(merged))}
+        except Exception:
+            pass
+
+    return {"trades": db_trades, "total": result.count or 0}
 
 
 @router.post("/open")

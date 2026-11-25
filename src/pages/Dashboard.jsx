@@ -12,18 +12,21 @@ import {
 } from 'recharts'
 import api from '../api'
 import { fetchLiveMarketData, DEFAULT_TOP_PAIRS } from '../services/marketData'
+import { useToast } from '../components/Toast'
 
 export default function Dashboard({ session }) {
   const navigate = useNavigate()
+  const toast = useToast()
   const [showBalance, setShowBalance] = useState(true)
   const [showAssistantBanner, setShowAssistantBanner] = useState(true)
   const [marketData, setMarketData] = useState(DEFAULT_TOP_PAIRS)
   const [account, setAccount] = useState(null)
   const [liveTrades, setLiveTrades] = useState([])
+  const [livePositions, setLivePositions] = useState([])
+  const [closingTicket, setClosingTicket] = useState(null)
   const [userBots, setUserBots] = useState([])
   const [equityCurve, setEquityCurve] = useState([])
   const [drawdown, setDrawdown] = useState({ current_drawdown: 0, max_drawdown_pct: 0, max_drawdown_amount: 0 })
-  const [loadingMarkets, setLoadingMarkets] = useState(true)
   const [analytics, setAnalytics] = useState({
     grossProfit: 0,
     grossLoss: 0,
@@ -34,36 +37,26 @@ export default function Dashboard({ session }) {
   })
 
   const uid = session?.user?.id || 'guest'
-  const userName = session?.user?.user_metadata?.full_name?.split(' ')[0] 
-    || (session?.user?.email ? session.user.email.split('@')[0] : 'Trader')
 
-  // Fetch real-time live market pairs + fast single-shot backend telemetry
+  // Fetch real-time live market pairs + fast single-shot & live-polled MT5 telemetry
   useEffect(() => {
     let isMounted = true
 
     const loadMarkets = async () => {
       try {
         const data = await fetchLiveMarketData()
-        if (isMounted) {
-          setMarketData(data.overview)
-          setLoadingMarkets(false)
-        }
-      } catch {
-        if (isMounted) setLoadingMarkets(false)
-      }
+        if (isMounted) setMarketData(data.overview)
+      } catch {}
     }
 
-    loadMarkets()
-    const timer = setInterval(loadMarkets, 8000)
-
-    if (session?.access_token) {
+    const loadTelemetry = () => {
+      if (!session?.access_token) return
       const headers = { Authorization: `Bearer ${session.access_token}` }
 
-      // Fetch active account, combined analytics summary, and real user bots in parallel (3 fast requests total!)
       Promise.all([
         api.get('/api/markets/active-account', { headers }).catch(() => null),
-        api.get('/api/analytics/summary?limit=10', { headers }).catch(() => null),
-        api.get('/api/bots', { headers }).catch(() => []),
+        api.get('/api/analytics/summary?limit=15', { headers }).catch(() => null),
+        api.get('/api/bots', { headers }).catch(() => null),
       ]).then(([accData, summaryData, botsData]) => {
         if (!isMounted) return
 
@@ -92,6 +85,9 @@ export default function Dashboard({ session }) {
           if (Array.isArray(summaryData.trades)) {
             setLiveTrades(summaryData.trades)
           }
+          if (Array.isArray(summaryData.live_positions)) {
+            setLivePositions(summaryData.live_positions)
+          }
         }
 
         if (Array.isArray(botsData)) {
@@ -100,11 +96,35 @@ export default function Dashboard({ session }) {
       })
     }
 
+    loadMarkets()
+    loadTelemetry()
+
+    const marketTimer = setInterval(loadMarkets, 8000)
+    const liveTimer = setInterval(loadTelemetry, 4000)
+
     return () => {
       isMounted = false
-      clearInterval(timer)
+      clearInterval(marketTimer)
+      clearInterval(liveTimer)
     }
   }, [session])
+
+  const handleCloseLivePosition = async (ticket) => {
+    setClosingTicket(ticket)
+    try {
+      const res = await api.post('/api/trades/close', { ticket: String(ticket) })
+      if (res?.success) {
+        toast.success(`Closed position #${ticket} (P&L: ${Number(res.profit || 0).toFixed(2)})`)
+        setLivePositions(prev => prev.filter(p => String(p.ticket) !== String(ticket)))
+      } else {
+        toast.error(res?.error || 'Failed to close trade')
+      }
+    } catch (err) {
+      toast.error(err.detail || err.message || 'Close failed')
+    } finally {
+      setClosingTicket(null)
+    }
+  }
 
   // Real Account Equity Curve Data
   const chartData = (equityCurve && equityCurve.length > 0)
@@ -165,7 +185,10 @@ export default function Dashboard({ session }) {
   const dailyTargetPct = Math.min(100, Math.round((dailyProfit / dailyTarget) * 100))
 
   const maxPositionsLimit = Number(riskPrefs.maxPositions) || 3
-  const currentOpenPositions = liveTrades.filter(t => (t.status || '').toLowerCase() === 'open').length
+  const currentOpenPositions = Math.max(
+    livePositions.length,
+    liveTrades.filter(t => (t.status || '').toLowerCase() === 'open').length
+  )
   const positionOccupancyPct = Math.min(100, Math.round((currentOpenPositions / maxPositionsLimit) * 100))
 
   const maxLossLimitPct = Number(riskPrefs.riskPercent) || 3.0
@@ -832,7 +855,7 @@ export default function Dashboard({ session }) {
 
       {/* ================= ROW 3 ================= */}
       <div className="dashboard-grid-row3">
-        {/* 3.1 Recent Trade Executions */}
+        {/* 3.1 Live MT5 Positions & Recent Trade Executions */}
         <div style={{
           background: '#131722',
           border: '1px solid #1c2233',
@@ -842,9 +865,24 @@ export default function Dashboard({ session }) {
           flexDirection: 'column'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <h2 style={{ fontSize: '14px', fontWeight: '700', color: '#ffffff', margin: 0 }}>
-              Recent Trade Executions
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h2 style={{ fontSize: '14px', fontWeight: '700', color: '#ffffff', margin: 0 }}>
+                Live &amp; Recent Trades
+              </h2>
+              {livePositions.length > 0 && (
+                <span style={{
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  padding: '2px 7px',
+                  borderRadius: '10px',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  color: '#10b981',
+                  border: '1px solid rgba(16, 185, 129, 0.35)'
+                }}>
+                  {livePositions.length} LIVE MT5
+                </span>
+              )}
+            </div>
             <button
               onClick={() => navigate('/analytics')}
               style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '12px', cursor: 'pointer', fontWeight: '500' }}
@@ -861,18 +899,24 @@ export default function Dashboard({ session }) {
                   <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: '500' }}>Type</th>
                   <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: '500' }}>Lots</th>
                   <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: '500' }}>Status</th>
-                  <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: '500' }}>Profit</th>
+                  <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: '500' }}>Profit / Action</th>
                 </tr>
               </thead>
               <tbody>
                 {liveTrades && liveTrades.length > 0 ? (
-                  liveTrades.slice(0, 5).map((t, idx) => {
+                  liveTrades.slice(0, 6).map((t, idx) => {
                     const profitNum = Number(t.profit || 0)
                     const isWin = profitNum >= 0
+                    const isOpen = (t.status || 'open').toLowerCase() === 'open'
                     return (
                       <tr key={t.id || t.ticket || idx} style={{ borderBottom: '1px solid #161b2a' }}>
-                        <td style={{ padding: '10px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <td style={{ padding: '10px 10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                           <span style={{ fontWeight: '600', color: '#f8fafc' }}>{t.symbol || t.pair || 'TRADE'}</span>
+                          {t.current_price && (
+                            <span style={{ fontSize: '10px', color: '#64748b' }}>
+                              {t.open_price} → {t.current_price}
+                            </span>
+                          )}
                         </td>
                         <td style={{ padding: '10px 10px', color: (t.direction || t.type || '').toUpperCase() === 'BUY' ? '#10b981' : '#f43f5e', fontWeight: '600' }}>
                           {(t.direction || t.type || 'BUY').toUpperCase()}
@@ -882,18 +926,41 @@ export default function Dashboard({ session }) {
                         </td>
                         <td style={{ padding: '10px 10px' }}>
                           <span style={{
-                            background: (t.status || 'open').toLowerCase() === 'open' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-                            color: (t.status || 'open').toLowerCase() === 'open' ? '#3b82f6' : '#10b981',
+                            background: t.is_live ? 'rgba(16, 185, 129, 0.16)' : isOpen ? 'rgba(59, 130, 246, 0.12)' : 'rgba(100, 116, 139, 0.15)',
+                            color: t.is_live ? '#10b981' : isOpen ? '#3b82f6' : '#94a3b8',
                             padding: '3px 8px',
                             borderRadius: '6px',
-                            fontSize: '11px',
-                            fontWeight: '600'
+                            fontSize: '10px',
+                            fontWeight: '700'
                           }}>
-                            {(t.status || 'OPEN').toUpperCase()}
+                            {t.is_live ? 'LIVE OPEN' : (t.status || 'OPEN').toUpperCase()}
                           </span>
                         </td>
-                        <td style={{ padding: '10px 10px', textAlign: 'right', fontWeight: '700', color: isWin ? '#10b981' : '#f43f5e' }}>
-                          {isWin ? '+' : ''}${profitNum.toFixed(2)}
+                        <td style={{ padding: '10px 10px', textAlign: 'right' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end' }}>
+                            <span style={{ fontWeight: '700', color: isWin ? '#10b981' : '#f43f5e' }}>
+                              {isWin ? '+' : ''}${profitNum.toFixed(2)}
+                            </span>
+                            {t.is_live && t.ticket && (
+                              <button
+                                onClick={() => handleCloseLivePosition(t.ticket)}
+                                disabled={closingTicket === t.ticket}
+                                style={{
+                                  background: 'rgba(244, 63, 94, 0.15)',
+                                  border: '1px solid rgba(244, 63, 94, 0.35)',
+                                  color: '#f43f5e',
+                                  borderRadius: '6px',
+                                  padding: '2px 7px',
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  cursor: 'pointer'
+                                }}
+                                title={`Close MT5 Ticket #${t.ticket}`}
+                              >
+                                {closingTicket === t.ticket ? '...' : 'Close'}
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     )
@@ -901,7 +968,7 @@ export default function Dashboard({ session }) {
                 ) : (
                   <tr>
                     <td colSpan={5} style={{ textAlign: 'center', padding: '24px', color: '#64748b' }}>
-                      No active trades in journal. Activate a bot or execute a manual trade.
+                      No active or recorded trades yet. Open a trade in MT5, Markets, or via an AI Bot.
                     </td>
                   </tr>
                 )}

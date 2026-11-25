@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, Query
 from app.database import supabase
 from app.middleware import get_current_user
 from app.schemas.analytics import Overview, DrawdownInfo
+from app.services import metaapi_service as mt5
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
-_ANALYTICS_COLS = "id, symbol, direction, volume, open_price, close_price, profit, strategy, status, opened_at, closed_at"
+_ANALYTICS_COLS = "id, symbol, direction, volume, open_price, close_price, profit, strategy, status, opened_at, closed_at, ticket"
 
 
 def _compute_overview(closed_trades: list) -> dict:
@@ -150,21 +151,70 @@ async def get_analytics_summary(
         def _fetch_account():
             return (
                 supabase.table("accounts")
-                .select("balance, equity, status")
+                .select("login, balance, equity, status")
                 .eq("user_id", user["sub"])
                 .order("created_at", desc=False)
                 .execute()
             )
 
-        tr_res, acc_res = await asyncio.gather(
+        tr_res, acc_res, terminal_info = await asyncio.gather(
             asyncio.to_thread(_fetch_trades),
             asyncio.to_thread(_fetch_account),
+            mt5.get_account_info(""),
         )
 
         all_trades = tr_res.data or []
         accounts = acc_res.data or []
         connected_acc = next((a for a in accounts if a.get("status") == "connected"), None)
         base_balance = float((connected_acc or (accounts[0] if accounts else {})).get("balance") or 0.0)
+
+        # Check if MT5 Desktop is synced to THIS authenticated user's connected account
+        user_login = str(connected_acc.get("login", "")).strip() if connected_acc else ""
+        terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+        terminal_synced = bool(user_login and terminal_login and user_login == terminal_login)
+
+        live_positions = []
+        floating_pnl = 0.0
+        if terminal_synced:
+            try:
+                live_positions = await mt5.get_positions("")
+                floating_pnl = sum(float(p.get("profit") or 0) + float(p.get("swap") or 0) for p in live_positions)
+            except Exception as mt5_err:
+                logger.debug(f"Live positions fetch warning: {mt5_err}")
+
+        # Merge live MT5 open position P&L & prices into recent trades list cleanly
+        live_by_ticket = {str(p.get("ticket")): p for p in live_positions}
+        seen_tickets = set()
+        merged_trades = []
+
+        # Include live MT5 positions first so open MT5 trades always show up with live profit!
+        db_by_ticket = {str(t.get("ticket")): t for t in all_trades if t.get("ticket")}
+        for p in live_positions:
+            t_str = str(p.get("ticket"))
+            seen_tickets.add(t_str)
+            db_row = db_by_ticket.get(t_str)
+            merged_trades.append({
+                "id": db_row.get("id") if db_row else f"mt5-{t_str}",
+                "ticket": t_str,
+                "symbol": p.get("symbol"),
+                "direction": (p.get("type") or "BUY").lower(),
+                "volume": p.get("volume"),
+                "open_price": p.get("open_price"),
+                "current_price": p.get("current_price"),
+                "stop_loss": p.get("stop_loss"),
+                "take_profit": p.get("take_profit"),
+                "profit": round(float(p.get("profit") or 0), 2),
+                "strategy": (db_row.get("strategy") if db_row else None) or (p.get("comment") or "mt5_live"),
+                "status": "open",
+                "opened_at": p.get("time") or (db_row.get("opened_at") if db_row else None),
+                "is_live": True,
+            })
+
+        for t in all_trades:
+            t_str = str(t.get("ticket") or "")
+            if t_str and t_str in seen_tickets:
+                continue
+            merged_trades.append(t)
 
         closed_all = [t for t in all_trades if (t.get("status") or "").lower() == "closed"]
         closed_filtered = closed_all
@@ -188,7 +238,10 @@ async def get_analytics_summary(
             "by_pair": _compute_by_pair(closed_filtered),
             "monthly": _compute_monthly(closed_all),
             "drawdown": drawdown,
-            "trades": all_trades[:limit_val],
+            "trades": merged_trades[:limit_val],
+            "live_positions": live_positions,
+            "floating_pnl": round(floating_pnl, 2),
+            "terminal_synced": terminal_synced,
         }
     except Exception as e:
         logger.error(f"Error in analytics summary: {e}")
@@ -200,6 +253,9 @@ async def get_analytics_summary(
             "monthly": [],
             "drawdown": {"max_drawdown_pct": 0.0, "max_drawdown_amount": 0.0, "current_drawdown": 0.0},
             "trades": [],
+            "live_positions": [],
+            "floating_pnl": 0.0,
+            "terminal_synced": False,
         }
 
 

@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from app.database import supabase
-from app.middleware import get_current_user
+from app.middleware import get_current_user, is_owner_or_admin
 from app.schemas.bots import BotCreate, BotUpdate
 from app.services import bot_engine
 from uuid import uuid4
@@ -125,7 +125,9 @@ async def start_bot(bot_id: str, user=Depends(get_current_user)):
         )
 
         user_plan = "free"
-        if sub_res.data and sub_res.data[0].get("plan"):
+        if is_owner_or_admin(user):
+            user_plan = "elite"
+        elif sub_res.data and sub_res.data[0].get("plan"):
             user_plan = sub_res.data[0]["plan"].lower()
         elif prof_res.data and prof_res.data[0].get("plan"):
             user_plan = prof_res.data[0]["plan"].lower()

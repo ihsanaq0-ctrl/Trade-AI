@@ -30,23 +30,46 @@ export default function Accounts({ session }) {
 
     const headers = { 'Authorization': `Bearer ${session.access_token}` }
 
-    api.get('/api/accounts', { headers })
-      .then(d => {
-        if (Array.isArray(d) && d.length > 0) {
-          setAccounts(d)
-        } else {
-          setAccounts([])
-        }
-      })
-      .catch(() => {
-        // Fallback default
-        setAccounts([])
-      })
+    const loadAccounts = () => {
+      api.get('/api/accounts', { headers })
+        .then(d => {
+          if (Array.isArray(d) && d.length > 0) {
+            setAccounts(d)
+          } else {
+            setAccounts([])
+          }
+        })
+        .catch(() => setAccounts([]))
 
-    api.get('/api/markets/active-account', { headers })
-      .then(d => setMt5Info(d?.connected && d?.login ? d : null))
-      .catch(() => setMt5Info(null))
-      .finally(() => setLoading(false))
+      api.get('/api/markets/active-account', { headers })
+        .then(d => setMt5Info(d?.connected && d?.login ? d : null))
+        .catch(() => setMt5Info(null))
+        .finally(() => setLoading(false))
+    }
+
+    loadAccounts()
+
+    // Live polling every 5s so live MT5 balance, equity, and open trade P&L update in real time
+    const pollTimer = setInterval(() => {
+      api.get('/api/markets/active-account', { headers })
+        .then(d => {
+          if (d?.connected && d?.login) {
+            setMt5Info(d)
+            if (d.terminal_synced) {
+              setAccounts(prev => prev.map(a =>
+                a.status === 'connected' && String(a.login) === String(d.login)
+                  ? { ...a, balance: d.balance, equity: d.equity, profit: d.profit }
+                  : a
+              ))
+            }
+          } else {
+            setMt5Info(null)
+          }
+        })
+        .catch(() => {})
+    }, 5000)
+
+    return () => clearInterval(pollTimer)
   }, [session])
 
   const handleAdd = async () => {

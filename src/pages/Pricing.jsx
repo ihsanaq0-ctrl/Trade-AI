@@ -2,12 +2,12 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CheckCircle2, Sparkles, Key, ArrowLeft, ExternalLink,
-  ShieldCheck, Zap, Crown, Lock, RefreshCw
+  ShieldCheck, Zap, Crown, Lock, RefreshCw, Copy
 } from 'lucide-react'
 import api from '../api'
 import { useToast } from '../components/Toast'
 
-export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
+export default function Pricing({ session, userPlan = 'free', isOwner = false, onPlanUpdated }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const toast = useToast()
@@ -16,8 +16,13 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
   const [plansMeta, setPlansMeta] = useState({ checkout_url: '', gumroad_configured: false })
   const [licenseKey, setLicenseKey] = useState('')
   const [activating, setActivating] = useState(false)
-  const [showLicenseBox, setShowLicenseBox] = useState(true)
   const [showCheckoutInfo, setShowCheckoutInfo] = useState(false)
+
+  // Owner license key generator state
+  const [genPlan, setGenPlan] = useState('pro')
+  const [genEmail, setGenEmail] = useState('')
+  const [generatedKey, setGeneratedKey] = useState('')
+  const [generating, setGenerating] = useState(false)
 
   useEffect(() => {
     api.get('/api/payments/plans')
@@ -29,16 +34,16 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
 
   const envCheckoutUrl = import.meta.env.VITE_GUMROAD_PRO_URL || ''
   const checkoutUrl = plansMeta.checkout_url || envCheckoutUrl
+  const hasProAccess = userPlan === 'pro' || userPlan === 'elite'
+  const hasEliteAccess = userPlan === 'elite'
 
   const handleBuyPro = () => {
     if (checkoutUrl) {
       const emailParam = session?.user?.email ? `?email=${encodeURIComponent(session.user.email)}` : ''
       window.open(`${checkoutUrl}${checkoutUrl.includes('?') ? '&' : ''}${emailParam.replace(/^\?/, '')}`, '_blank', 'noopener,noreferrer')
-      setShowLicenseBox(true)
       toast.info('Complete checkout in the opened tab, then paste your license key below to activate Pro instantly.')
     } else {
       setShowCheckoutInfo(true)
-      setShowLicenseBox(true)
     }
   }
 
@@ -47,6 +52,10 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
     const cleanKey = licenseKey.trim()
     if (!cleanKey) {
       toast.error('Please enter your license key first')
+      return
+    }
+    if (session?.user?.id && cleanKey.toLowerCase() === session.user.id.toLowerCase()) {
+      toast.warn('That is your User ID (UID), not a billing license key. Refresh the page if your owner email already grants full access, or generate/enter a TAI-PRO license key.')
       return
     }
     setActivating(true)
@@ -63,6 +72,25 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
       toast.error(err.detail || err.message || 'Invalid or expired license key')
     } finally {
       setActivating(false)
+    }
+  }
+
+  const handleGenerateKey = async (e) => {
+    e.preventDefault()
+    setGenerating(true)
+    try {
+      const res = await api.post('/api/payments/admin/issue-license', {
+        plan: genPlan,
+        target_email: genEmail.trim()
+      })
+      if (res?.success && res.license_key) {
+        setGeneratedKey(res.license_key)
+        toast.success(`Issued ${res.plan.toUpperCase()} key: ${res.license_key}`)
+      }
+    } catch (err) {
+      toast.error(err.detail || err.message || 'Failed to issue license key')
+    } finally {
+      setGenerating(false)
     }
   }
 
@@ -117,25 +145,31 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
           gap: '8px',
           padding: '6px 14px',
           borderRadius: '20px',
-          background: userPlan === 'pro' ? 'rgba(0, 212, 255, 0.14)' : userPlan === 'elite' ? 'rgba(245, 158, 11, 0.14)' : 'rgba(16, 185, 129, 0.14)',
-          border: `1px solid ${userPlan === 'pro' ? 'rgba(0, 212, 255, 0.35)' : userPlan === 'elite' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(16, 185, 129, 0.35)'}`,
-          color: userPlan === 'pro' ? '#00d4ff' : userPlan === 'elite' ? '#f59e0b' : '#10b981',
+          background: userPlan === 'elite' ? 'rgba(245, 158, 11, 0.14)' : userPlan === 'pro' ? 'rgba(0, 212, 255, 0.14)' : 'rgba(16, 185, 129, 0.14)',
+          border: `1px solid ${userPlan === 'elite' ? 'rgba(245, 158, 11, 0.35)' : userPlan === 'pro' ? 'rgba(0, 212, 255, 0.35)' : 'rgba(16, 185, 129, 0.35)'}`,
+          color: userPlan === 'elite' ? '#f59e0b' : userPlan === 'pro' ? '#00d4ff' : '#10b981',
           fontSize: '12px',
           fontWeight: 700
         }}>
           <Crown size={14} />
-          ACTIVE MEMBERSHIP: {userPlan.toUpperCase()} PLAN
+          {isOwner ? 'OWNER FULL ACCESS (ALL PLANS UNLOCKED)' : `ACTIVE MEMBERSHIP: ${userPlan.toUpperCase()} PLAN`}
         </div>
       </div>
 
       {/* Hero Header */}
       <div style={{ textAlign: 'center', padding: '8px 12px' }}>
         <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#ffffff', margin: '0 0 8px 0', letterSpacing: '-0.4px' }}>
-          Upgrade Your Trade-AI Membership
+          {hasEliteAccess ? 'All Trade-AI Plans & Bots Unlocked' : 'Upgrade Your Trade-AI Membership'}
         </h1>
-        <p style={{ fontSize: '14px', color: '#94a3b8', maxWidth: '620px', margin: '0 auto', lineHeight: 1.5 }}>
-          Start free with 1 active bot &amp; full manual chart trading, or unlock the high-frequency{' '}
-          <strong style={{ color: '#00d4ff' }}>PipStep Reversal EA</strong> and multi-bot automation with Pro.
+        <p style={{ fontSize: '14px', color: '#94a3b8', maxWidth: '640px', margin: '0 auto', lineHeight: 1.5 }}>
+          {isOwner
+            ? 'You are signed in as the platform Owner. Free, Pro (PipStep Reversal EA), and Elite AI strategies are all enabled on your account.'
+            : (
+              <>
+                Start free with 1 active bot &amp; full manual chart trading, or unlock the high-frequency{' '}
+                <strong style={{ color: '#00d4ff' }}>PipStep Reversal EA</strong> and multi-bot automation with Pro.
+              </>
+            )}
         </p>
       </div>
 
@@ -195,13 +229,13 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
               borderRadius: '10px',
               border: '1px solid #252d43',
               background: '#0c0e15',
-              color: userPlan === 'free' ? '#10b981' : '#94a3b8',
+              color: '#10b981',
               fontSize: '13px',
               fontWeight: 700,
               cursor: 'pointer'
             }}
           >
-            {userPlan === 'free' ? 'Active on Your Account' : 'Included in Your Plan'}
+            {userPlan === 'free' ? 'Active on Your Account' : '✓ Included'}
           </button>
         </div>
 
@@ -209,7 +243,7 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
         <div style={{
           ...cardBase,
           background: 'linear-gradient(180deg, rgba(0, 212, 255, 0.08) 0%, #131722 100%)',
-          border: `1.5px solid ${highlightedPlan === 'pro' || userPlan === 'pro' ? '#00d4ff' : 'rgba(0, 212, 255, 0.4)'}`,
+          border: `1.5px solid ${highlightedPlan === 'pro' || hasProAccess ? '#00d4ff' : 'rgba(0, 212, 255, 0.4)'}`,
           boxShadow: '0 0 32px rgba(0, 212, 255, 0.12)'
         }}>
           <span style={{
@@ -217,7 +251,7 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
             background: '#00d4ff', color: '#0c0e15', fontSize: '10px', fontWeight: 800,
             padding: '3px 10px', borderRadius: '10px'
           }}>
-            {userPlan === 'pro' ? 'ACTIVE PRO' : 'POPULAR · UNLOCKS PIPSTEP EA'}
+            {hasProAccess ? 'UNLOCKED' : 'POPULAR · UNLOCKS PIPSTEP EA'}
           </span>
 
           <div>
@@ -256,7 +290,7 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
             </div>
           </div>
 
-          {userPlan === 'pro' ? (
+          {hasProAccess ? (
             <button
               onClick={() => navigate('/bot')}
               style={{
@@ -271,7 +305,7 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
                 cursor: 'pointer'
               }}
             >
-              ✓ Pro Active — Open AI Bots
+              ✓ Pro Unlocked — Open AI Bots
             </button>
           ) : (
             <button
@@ -300,22 +334,22 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
           )}
         </div>
 
-        {/* 3. ELITE VIP (COMING SOON) */}
+        {/* 3. ELITE VIP */}
         <div style={{
           ...cardBase,
-          border: `1px solid ${highlightedPlan === 'elite' ? '#f59e0b' : 'rgba(245, 158, 11, 0.3)'}`,
-          opacity: 0.9
+          border: `1.5px solid ${hasEliteAccess || highlightedPlan === 'elite' ? '#f59e0b' : 'rgba(245, 158, 11, 0.3)'}`,
+          opacity: hasEliteAccess ? 1 : 0.92
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ fontSize: '16px', fontWeight: 700, color: '#f59e0b' }}>Elite VIP</div>
             <span style={{
               fontSize: '10px',
-              color: '#f59e0b',
-              background: 'rgba(245, 158, 11, 0.15)',
+              color: hasEliteAccess ? '#0c0e15' : '#f59e0b',
+              background: hasEliteAccess ? '#f59e0b' : 'rgba(245, 158, 11, 0.15)',
               padding: '3px 8px',
               borderRadius: '6px',
               fontWeight: 800
-            }}>COMING SOON</span>
+            }}>{hasEliteAccess ? 'UNLOCKED' : 'COMING SOON'}</span>
           </div>
 
           <div>
@@ -327,39 +361,111 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
             </p>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px', color: '#94a3b8', flex: 1 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px', color: '#cbd5e1', flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Lock size={14} color="#f59e0b" />
+              {hasEliteAccess ? <CheckCircle2 size={15} color="#f59e0b" /> : <Lock size={14} color="#f59e0b" />}
               <span>TradingAgents 6-Agent LLM Consensus</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Lock size={14} color="#f59e0b" />
+              {hasEliteAccess ? <CheckCircle2 size={15} color="#f59e0b" /> : <Lock size={14} color="#f59e0b" />}
               <span>Signal Strength Delta Hedging Engine</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Lock size={14} color="#f59e0b" />
+              {hasEliteAccess ? <CheckCircle2 size={15} color="#f59e0b" /> : <Lock size={14} color="#f59e0b" />}
               <span>Unlimited concurrent bots &amp; VIP alerts</span>
             </div>
           </div>
 
           <button
-            onClick={() => toast.info('Elite VIP is currently under active development and will launch soon!')}
+            onClick={() => hasEliteAccess ? navigate('/bot') : toast.info('Elite VIP is currently under development for external customers!')}
             style={{
               width: '100%',
               padding: '12px',
               borderRadius: '10px',
-              border: '1px solid rgba(245, 158, 11, 0.35)',
-              background: 'rgba(245, 158, 11, 0.08)',
+              border: '1px solid rgba(245, 158, 11, 0.4)',
+              background: hasEliteAccess ? 'rgba(245, 158, 11, 0.16)' : 'rgba(245, 158, 11, 0.08)',
               color: '#f59e0b',
               fontSize: '13px',
               fontWeight: 700,
               cursor: 'pointer'
             }}
           >
-            In Development — Coming Soon
+            {hasEliteAccess ? '✓ Elite Unlocked — Open AI Bots' : 'In Development — Coming Soon'}
           </button>
         </div>
       </div>
+
+      {/* Owner License Key Issuer Tool (visible ONLY to Owner / Admin) */}
+      {isOwner && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), #131722)',
+          border: '1px solid rgba(245, 158, 11, 0.35)',
+          borderRadius: '16px',
+          padding: '22px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+            <Crown size={18} color="#f59e0b" />
+            <h2 style={{ fontSize: '15px', fontWeight: 700, color: '#ffffff', margin: 0 }}>
+              Owner Panel: Issue Customer License Key (100% Free)
+            </h2>
+          </div>
+          <p style={{ margin: '0 0 14px 0', fontSize: '12.5px', color: '#94a3b8' }}>
+            Generate an active license key for yourself or any buyer before enabling Gumroad. Leave email empty to bind to your account or enter a user email.
+          </p>
+          <form onSubmit={handleGenerateKey} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <select
+              value={genPlan}
+              onChange={e => setGenPlan(e.target.value)}
+              style={{
+                padding: '10px 14px', background: '#0c0e15', border: '1px solid #1c2233',
+                borderRadius: '10px', color: '#ffffff', fontSize: '13px', outline: 'none'
+              }}
+            >
+              <option value="pro">Pro Trader ($29/mo)</option>
+              <option value="elite">Elite VIP ($79/mo)</option>
+            </select>
+            <input
+              type="email"
+              value={genEmail}
+              onChange={e => setGenEmail(e.target.value)}
+              placeholder="Customer email (optional — leave blank for self)"
+              style={{
+                flex: '1 1 240px', padding: '10px 14px', background: '#0c0e15',
+                border: '1px solid #1c2233', borderRadius: '10px', color: '#ffffff', fontSize: '13px', outline: 'none'
+              }}
+            />
+            <button
+              type="submit"
+              disabled={generating}
+              style={{
+                padding: '10px 18px', borderRadius: '10px', border: 'none',
+                background: '#f59e0b', color: '#0c0e15', fontSize: '13px', fontWeight: 800, cursor: 'pointer'
+              }}
+            >
+              {generating ? 'Issuing...' : 'Generate License Key'}
+            </button>
+          </form>
+          {generatedKey && (
+            <div style={{
+              marginTop: '12px', padding: '10px 14px', background: '#0c0e15', border: '1px solid #1c2233',
+              borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px'
+            }}>
+              <code style={{ color: '#00d4ff', fontSize: '13px', fontWeight: 700 }}>{generatedKey}</code>
+              <button
+                type="button"
+                onClick={() => { navigator.clipboard.writeText(generatedKey); toast.success('License key copied!') }}
+                style={{
+                  background: 'rgba(0, 212, 255, 0.14)', border: '1px solid rgba(0, 212, 255, 0.35)',
+                  color: '#00d4ff', padding: '5px 10px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: '5px'
+                }}
+              >
+                <Copy size={12} /> Copy Key
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Checkout Instructions notice when Gumroad URL is not yet linked */}
       {showCheckoutInfo && !checkoutUrl && (
@@ -382,80 +488,75 @@ export default function Pricing({ session, userPlan = 'free', onPlanUpdated }) {
             <code>GUMROAD_PRODUCT_ID</code> / <code>GUMROAD_SECRET</code> in backend <code>.env</code>), clicking{' '}
             <strong>Buy Pro Plan</strong> opens your checkout page directly and issues instant license keys.
           </p>
-          <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>
-            Already purchased or received a license key from support? Enter it below to unlock Pro immediately.
-          </p>
         </div>
       )}
 
       {/* License Key Activation Card */}
-      {showLicenseBox && (
-        <div style={{
-          background: '#131722',
-          border: '1px solid #1c2233',
-          borderRadius: '16px',
-          padding: '24px'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-            <div style={{
-              width: '34px', height: '34px', borderRadius: '8px',
-              background: 'rgba(0, 212, 255, 0.15)', display: 'flex',
-              alignItems: 'center', justifyContent: 'center'
-            }}>
-              <Key size={17} color="#00d4ff" />
-            </div>
-            <div>
-              <h2 style={{ fontSize: '16px', fontWeight: 700, color: '#ffffff', margin: 0 }}>
-                Already have a Pro License Key?
-              </h2>
-              <p style={{ fontSize: '12px', color: '#94a3b8', margin: '2px 0 0 0' }}>
-                Paste your Gumroad license key below to unlock PipStep Reversal EA immediately
-              </p>
-            </div>
+      <div style={{
+        background: '#131722',
+        border: '1px solid #1c2233',
+        borderRadius: '16px',
+        padding: '24px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+          <div style={{
+            width: '34px', height: '34px', borderRadius: '8px',
+            background: 'rgba(0, 212, 255, 0.15)', display: 'flex',
+            alignItems: 'center', justifyContent: 'center'
+          }}>
+            <Key size={17} color="#00d4ff" />
           </div>
-
-          <form onSubmit={handleActivateLicense} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '14px' }}>
-            <input
-              type="text"
-              value={licenseKey}
-              onChange={e => setLicenseKey(e.target.value)}
-              placeholder="e.g. XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX"
-              style={{
-                flex: '1 1 280px',
-                padding: '12px 16px',
-                background: '#0c0e15',
-                border: '1px solid #1c2233',
-                borderRadius: '10px',
-                color: '#ffffff',
-                fontSize: '13px',
-                outline: 'none',
-                fontFamily: 'monospace'
-              }}
-            />
-            <button
-              type="submit"
-              disabled={activating}
-              style={{
-                padding: '12px 22px',
-                borderRadius: '10px',
-                border: 'none',
-                background: '#00d4ff',
-                color: '#0c0e15',
-                fontSize: '13px',
-                fontWeight: 800,
-                cursor: activating ? 'not-allowed' : 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                opacity: activating ? 0.7 : 1
-              }}
-            >
-              {activating ? <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={15} />}
-              {activating ? 'Verifying...' : 'Activate License'}
-            </button>
-          </form>
+          <div>
+            <h2 style={{ fontSize: '16px', fontWeight: 700, color: '#ffffff', margin: 0 }}>
+              Already have a Pro License Key?
+            </h2>
+            <p style={{ fontSize: '12px', color: '#94a3b8', margin: '2px 0 0 0' }}>
+              Paste your Gumroad or Trade-AI license key below to unlock Pro Trader immediately
+            </p>
+          </div>
         </div>
-      )}
+
+        <form onSubmit={handleActivateLicense} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '14px' }}>
+          <input
+            type="text"
+            value={licenseKey}
+            onChange={e => setLicenseKey(e.target.value)}
+            placeholder="e.g. TAI-PRO-XXXXXXXX or Gumroad license key"
+            style={{
+              flex: '1 1 280px',
+              padding: '12px 16px',
+              background: '#0c0e15',
+              border: '1px solid #1c2233',
+              borderRadius: '10px',
+              color: '#ffffff',
+              fontSize: '13px',
+              outline: 'none',
+              fontFamily: 'monospace'
+            }}
+          />
+          <button
+            type="submit"
+            disabled={activating}
+            style={{
+              padding: '12px 22px',
+              borderRadius: '10px',
+              border: 'none',
+              background: '#00d4ff',
+              color: '#0c0e15',
+              fontSize: '13px',
+              fontWeight: 800,
+              cursor: activating ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              opacity: activating ? 0.7 : 1
+            }}
+          >
+            {activating ? <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={15} />}
+            {activating ? 'Verifying...' : 'Activate License'}
+          </button>
+        </form>
+      </div>
     </div>
   )
 }

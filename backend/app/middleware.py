@@ -186,26 +186,29 @@ async def get_current_user(
     return payload
 
 
+def is_owner_or_admin(user: dict | None) -> bool:
+    """Return True if the authenticated user is an app admin/owner."""
+    if not user:
+        return False
+    app_meta = user.get("app_metadata") or {}
+    user_role = app_meta.get("role")
+    email = (user.get("email") or "").lower().strip()
+    admin_emails = [
+        e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()
+    ] if settings.admin_emails else []
+    return (
+        user_role in ("admin", "service_role")
+        or (bool(email) and email in admin_emails)
+    )
+
+
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     """
     Fail-closed Admin check. Requires explicit 'admin'/'service_role' claim
     or user email listed in ADMIN_EMAILS env config. Never allows regular
     authenticated users to execute admin endpoints when ADMIN_EMAILS is unset.
     """
-    app_meta = user.get("app_metadata") or {}
-    user_role = app_meta.get("role")
-    email = (user.get("email") or "").lower().strip()
-
-    admin_emails = [
-        e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()
-    ] if settings.admin_emails else []
-
-    is_admin = (
-        user_role in ("admin", "service_role")
-        or (bool(email) and email in admin_emails)
-    )
-
-    if not is_admin:
+    if not is_owner_or_admin(user):
         raise HTTPException(
             status_code=403,
             detail="Forbidden: Admin access required"

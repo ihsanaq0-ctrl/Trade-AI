@@ -3,6 +3,7 @@ Local MT5 connector (Path A — free, local terminal).
 Uses the MetaTrader5 Python library connected to the local MT5 terminal.
 """
 
+import asyncio
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
@@ -158,27 +159,32 @@ async def get_account_info(account_id: str) -> dict:
 
 
 async def get_positions(account_id: str) -> list:
-    """Get open positions from local MT5."""
-    mt5 = _ensure_mt5()
-    positions = mt5.positions_get()
-    if not positions:
-        return []
-    result = []
-    for p in positions:
-        result.append({
-            "ticket": p.ticket,
-            "symbol": p.symbol,
-            "type": "BUY" if p.type == 0 else "SELL",
-            "volume": p.volume,
-            "open_price": p.price_open,
-            "current_price": p.price_current,
-            "stop_loss": p.sl,
-            "take_profit": p.tp,
-            "profit": p.profit,
-            "swap": p.swap,
-            "time": datetime.fromtimestamp(p.time, tz=timezone.utc).isoformat(),
-        })
-    return result
+    """Get open positions from local MT5 without blocking the event loop."""
+    def _get_sync():
+        mt5 = _ensure_mt5()
+        positions = mt5.positions_get()
+        if not positions:
+            return []
+        result = []
+        for p in positions:
+            result.append({
+                "ticket": p.ticket,
+                "symbol": p.symbol,
+                "type": "BUY" if p.type == 0 else "SELL",
+                "volume": p.volume,
+                "open_price": p.price_open,
+                "current_price": p.price_current,
+                "stop_loss": p.sl,
+                "take_profit": p.tp,
+                "profit": round(float(p.profit), 2),
+                "swap": round(float(p.swap), 2),
+                "comment": getattr(p, "comment", ""),
+                "magic": getattr(p, "magic", 0),
+                "time": datetime.fromtimestamp(p.time, tz=timezone.utc).isoformat(),
+            })
+        return result
+
+    return await asyncio.to_thread(_get_sync)
 
 
 async def get_candles(pair: str, timeframe: str, count: int = 100) -> list:

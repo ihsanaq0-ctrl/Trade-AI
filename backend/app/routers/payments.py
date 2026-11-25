@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from app.database import supabase
-from app.middleware import get_current_user
+from app.middleware import get_current_user, require_admin, is_owner_or_admin
 from app.config import settings
 from app.services import gumroad_service
 from uuid import uuid4
@@ -15,6 +15,11 @@ router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 class LicenseActivateRequest(BaseModel):
     license_key: str
+
+
+class AdminIssueLicenseRequest(BaseModel):
+    plan: str = "pro"
+    target_email: str = ""
 
 
 @router.get("/plans")
@@ -127,6 +132,15 @@ async def gumroad_webhook(request: Request):
 
 @router.get("/license")
 async def check_license(user=Depends(get_current_user)):
+    # Owner / Admin gets full Elite tier across every plan & strategy
+    if is_owner_or_admin(user):
+        return {
+            "plan": "elite",
+            "status": "active",
+            "is_owner": True,
+            "license_key": "OWNER-FULL-ACCESS",
+        }
+
     sub_res, prof_res = await asyncio.gather(
         asyncio.to_thread(
             lambda: supabase.table("subscriptions").select("plan, status, gumroad_license_key").eq("user_id", user["sub"]).eq("status", "active").limit(1).execute()
@@ -140,14 +154,54 @@ async def check_license(user=Depends(get_current_user)):
         return {
             "plan": (sub_res.data[0].get("plan") or "pro").lower(),
             "status": "active",
+            "is_owner": False,
             "license_key": sub_res.data[0].get("gumroad_license_key")
         }
 
     if prof_res.data and prof_res.data[0].get("plan"):
         plan_val = prof_res.data[0]["plan"].lower()
-        return {"plan": plan_val, "status": "active" if plan_val != "free" else "none"}
+        return {"plan": plan_val, "status": "active" if plan_val != "free" else "none", "is_owner": False}
 
-    return {"plan": "free", "status": "none"}
+    return {"plan": "free", "status": "none", "is_owner": False}
+
+
+@router.post("/admin/issue-license")
+async def admin_issue_license(data: AdminIssueLicenseRequest, user=Depends(require_admin)):
+    """Owner-only endpoint to issue a real Pro/Elite license key for self or customers."""
+    target_plan = (data.plan or "pro").lower()
+    if target_plan not in ("pro", "elite"):
+        raise HTTPException(status_code=400, detail="Plan must be 'pro' or 'elite'")
+
+    target_uid = user["sub"]
+    if data.target_email and data.target_email.strip():
+        target_res = await asyncio.to_thread(
+            lambda: supabase.table("profiles").select("id").eq("email", data.target_email.strip().lower()).limit(1).execute()
+        )
+        if not target_res.data:
+            raise HTTPException(status_code=404, detail=f"User {data.target_email} not found in profiles")
+        target_uid = target_res.data[0]["id"]
+
+    new_key = f"TAI-{target_plan.upper()}-{str(uuid4()).upper()[:18]}"
+    sub = {
+        "id": str(uuid4()),
+        "user_id": target_uid,
+        "gumroad_license_key": new_key,
+        "gumroad_product_id": "owner_issued",
+        "plan": target_plan,
+        "status": "active",
+        "current_period_start": datetime.utcnow().isoformat(),
+        "current_period_end": datetime.utcnow().isoformat(),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    await asyncio.to_thread(lambda: supabase.table("subscriptions").insert(sub).execute())
+    if target_plan in ("free", "pro", "elite"):
+        try:
+            await asyncio.to_thread(
+                lambda: supabase.table("profiles").update({"plan": target_plan}).eq("id", target_uid).execute()
+            )
+        except Exception:
+            pass
+    return {"success": True, "license_key": new_key, "plan": target_plan}
 
 
 @router.post("/activate-license")

@@ -111,14 +111,14 @@ export default function Bot({ session, userPlan: propPlan = 'free' }) {
       return
     }
 
-    // Elite lock rule: other bot not ready for now
-    if (['trading_agents', 'signal_strength_hedge', 'ai_committee'].includes(strategy)) {
+    // Elite lock rule: allow when userPlan === 'elite' (or owner)
+    if (['trading_agents', 'signal_strength_hedge', 'ai_committee'].includes(strategy) && userPlan !== 'elite') {
       toast.info('This strategy is exclusive to the Elite Plan (Coming Soon). Opening plan details...')
       navigate('/pricing?plan=elite')
       return
     }
 
-    // Pro lock rule: PipStep Reversal EA requires Pro -> open buying page directly
+    // Pro lock rule: PipStep Reversal EA requires Pro or Elite
     if (strategy === 'pipstep_reversal' && userPlan === 'free') {
       toast.warn('PipStep Reversal EA requires the PRO Plan. Redirecting to upgrade page...')
       navigate('/pricing?plan=pro')

@@ -52,12 +52,14 @@ function Layout() {
   const [loading, setLoading] = useState(true)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [userPlan, setUserPlan] = useState('free')
+  const [isOwner, setIsOwner] = useState(false)
   const isLoginPage = location.pathname === '/login'
 
   const fetchUserPlan = useCallback(async (activeSession) => {
     const s = activeSession ?? session
     if (!s?.access_token) {
       setUserPlan('free')
+      setIsOwner(false)
       return
     }
     try {
@@ -65,8 +67,10 @@ function Layout() {
         headers: { Authorization: `Bearer ${s.access_token}` }
       })
       setUserPlan((res?.plan || 'free').toLowerCase())
+      setIsOwner(Boolean(res?.is_owner))
     } catch {
       setUserPlan('free')
+      setIsOwner(false)
     }
   }, [session])
 
@@ -89,6 +93,7 @@ function Layout() {
         fetchUserPlan(newSession)
       } else {
         setUserPlan('free')
+        setIsOwner(false)
       }
     })
 
@@ -156,7 +161,7 @@ function Layout() {
           <Route path="/accounts" element={<ProtectedRoute session={session}><Accounts key={uidKey} session={session} /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute session={session}><Settings key={uidKey} session={session} /></ProtectedRoute>} />
           <Route path="/profile" element={<ProtectedRoute session={session}><Profile key={uidKey} session={session} userPlan={userPlan} /></ProtectedRoute>} />
-          <Route path="/pricing" element={<ProtectedRoute session={session}><Pricing key={uidKey} session={session} userPlan={userPlan} onPlanUpdated={() => fetchUserPlan(session)} /></ProtectedRoute>} />
+          <Route path="/pricing" element={<ProtectedRoute session={session}><Pricing key={uidKey} session={session} userPlan={userPlan} isOwner={isOwner} onPlanUpdated={() => fetchUserPlan(session)} /></ProtectedRoute>} />
           <Route path="/admin" element={<ProtectedRoute session={session}><Admin key={uidKey} session={session} /></ProtectedRoute>} />
 
           <Route path="*" element={<Navigate to={session ? '/dashboard' : '/login'} replace />} />
