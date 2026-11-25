@@ -9,7 +9,7 @@ import { useToast } from '../components/Toast'
 
 const categories = ['All', 'Forex', 'Crypto', 'Commodities']
 
-export default function Markets() {
+export default function Markets({ session }) {
   const toast = useToast()
   const [prices, setPrices] = useState([])
   const [search, setSearch] = useState('')
@@ -195,7 +195,6 @@ export default function Markets() {
           style={{
             padding: '9px 18px',
             borderRadius: '10px',
-            border: 'none',
             fontSize: '13px',
             fontWeight: '600',
             cursor: 'pointer',
@@ -224,7 +223,6 @@ export default function Markets() {
           style={{
             padding: '9px 18px',
             borderRadius: '10px',
-            border: 'none',
             fontSize: '13px',
             fontWeight: '600',
             cursor: 'pointer',
@@ -273,7 +271,7 @@ export default function Markets() {
                 key={c}
                 onClick={() => setCategory(c)}
                 style={{
-                  padding: '8px 16px', borderRadius: '10px', border: 'none', cursor: 'pointer',
+                  padding: '8px 16px', borderRadius: '10px', cursor: 'pointer',
                   fontSize: '12px', fontWeight: '600',
                   background: category === c ? '#3b5bf5' : '#131722',
                   color: category === c ? '#ffffff' : '#94a3b8',
@@ -546,7 +544,7 @@ export default function Markets() {
       )}
 
       {/* Candlestick & Trade Execution Modal */}
-      {selectedPair && <ChartModal pair={selectedPair} onClose={() => setSelectedPair(null)} />}
+      {selectedPair && <ChartModal pair={selectedPair} session={session} onClose={() => setSelectedPair(null)} />}
     </div>
   )
 }

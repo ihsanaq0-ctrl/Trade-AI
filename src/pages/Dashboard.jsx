@@ -20,6 +20,7 @@ export default function Dashboard({ session }) {
   const [marketData, setMarketData] = useState(DEFAULT_TOP_PAIRS)
   const [account, setAccount] = useState(null)
   const [liveTrades, setLiveTrades] = useState([])
+  const [userBots, setUserBots] = useState([])
   const [equityCurve, setEquityCurve] = useState([])
   const [drawdown, setDrawdown] = useState({ current_drawdown: 0, max_drawdown_pct: 0, max_drawdown_amount: 0 })
   const [loadingMarkets, setLoadingMarkets] = useState(true)
@@ -32,10 +33,11 @@ export default function Dashboard({ session }) {
     profitFactor: 0
   })
 
+  const uid = session?.user?.id || 'guest'
   const userName = session?.user?.user_metadata?.full_name?.split(' ')[0] 
     || (session?.user?.email ? session.user.email.split('@')[0] : 'Trader')
 
-  // Fetch real-time live market pairs
+  // Fetch real-time live market pairs + fast single-shot backend telemetry
   useEffect(() => {
     let isMounted = true
 
@@ -52,67 +54,50 @@ export default function Dashboard({ session }) {
     }
 
     loadMarkets()
-    const timer = setInterval(loadMarkets, 6000)
+    const timer = setInterval(loadMarkets, 8000)
 
-    // Check MT5 account & backend analytics
     if (session?.access_token) {
       const headers = { Authorization: `Bearer ${session.access_token}` }
 
-      // 1. Live MT5 Active Account (tied to authenticated user)
-      api.get('/api/markets/active-account', { headers })
-        .then(data => {
-          if (isMounted) {
-            if (data && data.connected && data.login) {
-              setAccount(data)
-            } else {
-              setAccount(null)
-            }
-          }
-        })
-        .catch(() => isMounted && setAccount(null))
+      // Fetch active account, combined analytics summary, and real user bots in parallel (3 fast requests total!)
+      Promise.all([
+        api.get('/api/markets/active-account', { headers }).catch(() => null),
+        api.get('/api/analytics/summary?limit=10', { headers }).catch(() => null),
+        api.get('/api/bots', { headers }).catch(() => []),
+      ]).then(([accData, summaryData, botsData]) => {
+        if (!isMounted) return
 
-      // 2. Recent Live Trades
-      api.get('/api/trades?limit=10', { headers })
-        .then(data => {
-          if (isMounted && data?.trades) {
-            setLiveTrades(data.trades)
-          }
-        })
-        .catch(() => {})
+        if (accData && accData.connected && accData.login) {
+          setAccount(accData)
+        } else {
+          setAccount(null)
+        }
 
-      // 3. Analytics Overview
-      api.get('/api/analytics/overview', { headers })
-        .then(data => {
-          if (isMounted && data) {
-            setAnalytics({
-              grossProfit: Number(data.gross_profit) || 0,
-              grossLoss: Number(data.gross_loss) || 0,
-              netProfit: Number(data.total_profit) || 0,
-              totalTrades: Number(data.total_trades) || 0,
-              winRate: Number(data.win_rate) || 0,
-              profitFactor: Number(data.profit_factor) || 0
-            })
+        if (summaryData) {
+          const ov = summaryData.overview || {}
+          setAnalytics({
+            grossProfit: Number(ov.gross_profit) || 0,
+            grossLoss: Number(ov.gross_loss) || 0,
+            netProfit: Number(ov.total_profit) || 0,
+            totalTrades: Number(ov.total_trades) || 0,
+            winRate: Number(ov.win_rate) || 0,
+            profitFactor: Number(ov.profit_factor) || 0
+          })
+          if (Array.isArray(summaryData.equity_curve)) {
+            setEquityCurve(summaryData.equity_curve)
           }
-        })
-        .catch(() => {})
+          if (summaryData.drawdown) {
+            setDrawdown(summaryData.drawdown)
+          }
+          if (Array.isArray(summaryData.trades)) {
+            setLiveTrades(summaryData.trades)
+          }
+        }
 
-      // 4. Historical Equity Curve
-      api.get('/api/analytics/equity-curve', { headers })
-        .then(data => {
-          if (isMounted && Array.isArray(data)) {
-            setEquityCurve(data)
-          }
-        })
-        .catch(() => {})
-
-      // 5. Real Account Drawdown
-      api.get('/api/analytics/drawdown', { headers })
-        .then(data => {
-          if (isMounted && data) {
-            setDrawdown(data)
-          }
-        })
-        .catch(() => {})
+        if (Array.isArray(botsData)) {
+          setUserBots(botsData)
+        }
+      })
     }
 
     return () => {
@@ -152,44 +137,38 @@ export default function Dashboard({ session }) {
   const riskTitle = currentDd < 5 ? 'Capital Protected' : (currentDd < 10 ? 'Moderate Exposure' : 'High Drawdown Alert')
   const riskDesc = currentDd < 5 ? 'Drawdown is under 5.0%. Margin exposure is optimal.' : 'Drawdown elevated. Monitor active bot positions.'
 
-  // Algorithmic Strategy Profiles
-  const strategies = [
-    {
-      id: 'smc',
-      name: 'Smart Money Concept',
-      pair: 'XAUUSD, EURUSD',
-      type: 'Order Blocks & FVG',
-      status: 'ACTIVE',
-      color: '#10b981'
-    },
-    {
-      id: 'scalp',
-      name: 'NY Close Scalper',
-      pair: 'EURUSD, GBPUSD',
-      type: 'Mean Reversion',
-      status: 'ACTIVE',
-      color: '#3b5bf5'
-    },
-    {
-      id: 'trend',
-      name: 'Trend Momentum Alpha',
-      pair: 'BTCUSD, US500',
-      type: 'EMA 20/50 + MACD',
-      status: 'STANDBY',
-      color: '#f59e0b'
-    }
-  ]
+  // Real User Algorithmic Bots (instead of hardcoded fake statuses)
+  const strategyPalette = {
+    smart_money: '#10b981',
+    pipstep_reversal: '#00d4ff',
+    classic: '#3b5bf5',
+    scalp_fvg: '#a855f7',
+    scalp_pyramid: '#ff6b35',
+    nyao_scalper: '#38ef7d',
+    full_confluence: '#f59e0b'
+  }
+  const strategies = userBots.slice(0, 3).map(b => ({
+    id: b.id,
+    name: (b.strategy || 'bot').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    pair: `${b.pair || 'EURUSD'} · ${b.timeframe || 'H1'}`,
+    status: (b.status || 'stopped').toUpperCase(),
+    color: strategyPalette[b.strategy] || '#3b5bf5'
+  }))
 
-  // Quant Risk Limits & Safeguards
+  // Quant Risk Limits & Safeguards (reads user-scoped preferences when set)
+  let riskPrefs = {}
+  try {
+    riskPrefs = JSON.parse(localStorage.getItem(`trade_bot_risk_defaults_${uid}`) || '{}')
+  } catch {}
   const dailyTarget = 100
   const dailyProfit = Math.max(0, analytics.netProfit)
   const dailyTargetPct = Math.min(100, Math.round((dailyProfit / dailyTarget) * 100))
 
-  const maxPositionsLimit = 3
-  const currentOpenPositions = liveTrades.filter(t => t.status === 'open' || !t.status).length
+  const maxPositionsLimit = Number(riskPrefs.maxPositions) || 3
+  const currentOpenPositions = liveTrades.filter(t => (t.status || '').toLowerCase() === 'open').length
   const positionOccupancyPct = Math.min(100, Math.round((currentOpenPositions / maxPositionsLimit) * 100))
 
-  const maxLossLimitPct = 3.0
+  const maxLossLimitPct = Number(riskPrefs.riskPercent) || 3.0
   const lossGuardPct = Math.min(100, Math.round((currentDd / maxLossLimitPct) * 100))
 
   const pnlDistributionData = [
@@ -234,13 +213,13 @@ export default function Dashboard({ session }) {
               </div>
               <span style={{
                 fontSize: '11px',
-                color: '#64748b',
+                color: account?.terminal_synced ? '#10b981' : (account?.connected ? '#f59e0b' : '#64748b'),
                 background: '#171b28',
                 padding: '2px 8px',
                 borderRadius: '4px',
                 border: '1px solid #252d43'
               }}>
-                {account?.server || 'Demo MT5'}
+                {account?.server || 'No Broker Connected'}
               </span>
             </div>
 
@@ -498,7 +477,8 @@ export default function Dashboard({ session }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
                 <span style={{
                   width: '8px', height: '8px', borderRadius: '50%',
-                  background: '#10b981', boxShadow: '0 0 8px #10b981'
+                  background: account?.terminal_synced ? '#10b981' : (account?.connected ? '#f59e0b' : '#64748b'),
+                  boxShadow: account?.terminal_synced ? '0 0 8px #10b981' : (account?.connected ? '0 0 8px #f59e0b' : 'none')
                 }} />
                 <span style={{ fontSize: '12px', fontWeight: '700', color: '#cbd5e1' }}>
                   MT5 Execution Bridge
@@ -506,13 +486,37 @@ export default function Dashboard({ session }) {
               </div>
 
               <div style={{ fontSize: '13px', fontWeight: '700', color: '#ffffff', marginBottom: '6px' }}>
-                Terminal: {account?.login ? `Active #${account.login}` : 'Connected Node'}
+                {account?.terminal_synced
+                  ? `Synced: #${account.login}`
+                  : account?.connected
+                  ? `Linked: #${account.login} (Not Synced)`
+                  : 'No MT5 Account Connected'}
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '11px', color: '#94a3b8' }}>
-                <div>Leverage: <strong style={{ color: '#ffffff' }}>1:{account?.leverage || 100}</strong></div>
-                <div>Free Margin: <strong style={{ color: '#10b981' }}>${account?.margin_free ? Math.round(account.margin_free).toLocaleString() : '0'}</strong></div>
-              </div>
+              {account?.connected ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '11px', color: '#94a3b8' }}>
+                  <div>Leverage: <strong style={{ color: '#ffffff' }}>1:{account?.leverage || 100}</strong></div>
+                  <div>Free Margin: <strong style={{ color: '#10b981' }}>${account?.margin_free ? Math.round(account.margin_free).toLocaleString() : '0'}</strong></div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => navigate('/accounts')}
+                  style={{
+                    marginTop: '4px',
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(59, 91, 245, 0.2)',
+                    border: '1px solid rgba(59, 91, 245, 0.4)',
+                    color: '#818cf8',
+                    fontSize: '11px',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    alignSelf: 'flex-start'
+                  }}
+                >
+                  Connect MT5 Account →
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -753,8 +757,29 @@ export default function Dashboard({ session }) {
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, justifyContent: 'space-between' }}>
-            {strategies.map((strat) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, justifyContent: strategies.length > 0 ? 'space-between' : 'center' }}>
+            {strategies.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '16px 8px', color: '#64748b', fontSize: '12px' }}>
+                No bots configured on this account yet.
+                <div style={{ marginTop: '10px' }}>
+                  <button
+                    onClick={() => navigate('/bot')}
+                    style={{
+                      background: 'rgba(59, 91, 245, 0.15)',
+                      border: '1px solid rgba(59, 91, 245, 0.35)',
+                      color: '#818cf8',
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Configure AI Bot →
+                  </button>
+                </div>
+              </div>
+            ) : strategies.map((strat) => (
               <div
                 key={strat.id}
                 onClick={() => navigate('/bot')}
@@ -789,8 +814,8 @@ export default function Dashboard({ session }) {
 
                 <div style={{ textAlign: 'right' }}>
                   <span style={{
-                    background: strat.status === 'ACTIVE' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                    color: strat.status === 'ACTIVE' ? '#10b981' : '#f59e0b',
+                    background: strat.status === 'RUNNING' ? 'rgba(16, 185, 129, 0.15)' : strat.status === 'ERROR' ? 'rgba(244, 63, 94, 0.15)' : 'rgba(100, 116, 139, 0.15)',
+                    color: strat.status === 'RUNNING' ? '#10b981' : strat.status === 'ERROR' ? '#f43f5e' : '#94a3b8',
                     padding: '2px 8px',
                     borderRadius: '6px',
                     fontSize: '10px',

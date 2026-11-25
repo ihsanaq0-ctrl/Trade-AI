@@ -90,7 +90,10 @@ export default function Accounts({ session }) {
         console.warn('Initial connect notice:', connErr)
       }
 
-      setAccounts(prev => [finalAcc, ...prev.filter(a => a.id !== finalAcc.id)])
+      setAccounts(prev => [
+        finalAcc,
+        ...prev.filter(a => a.id !== finalAcc.id).map(a => finalAcc.status === 'connected' ? { ...a, status: 'disconnected' } : a)
+      ])
       setShowAdd(false)
       setForm({ nickname: '', broker: 'Exness', login: '', password: '', server: '', type: 'demo' })
       toast.success('Broker account registered successfully')
@@ -111,7 +114,7 @@ export default function Accounts({ session }) {
         ...(res?.balance !== undefined ? { balance: res.balance, equity: res.equity } : {})
       } : (isConnecting ? { ...a, status: 'disconnected' } : a)))
       
-      api.get('/api/markets/active-account').then(d => setMt5Info(d?.connected && d?.login ? d : null)).catch(() => {})
+      api.get('/api/markets/active-account').then(d => setMt5Info(d?.connected && d?.login ? d : null)).catch(() => setMt5Info(null))
       toast.info(isConnecting ? 'Account connected' : 'Account disconnected')
     } catch (e) {
       toast.error(`Operation failed: ${e?.response?.data?.detail || e.message}`)
@@ -122,6 +125,7 @@ export default function Accounts({ session }) {
     try {
       await api.delete(`/api/accounts/${id}`)
       setAccounts(prev => prev.filter(a => a.id !== id))
+      api.get('/api/markets/active-account').then(d => setMt5Info(d?.connected && d?.login ? d : null)).catch(() => setMt5Info(null))
       toast.success('Account removed')
     } catch (e) {
       toast.error(`Failed to remove account: ${e?.response?.data?.detail || e.message}`)
@@ -210,8 +214,8 @@ export default function Accounts({ session }) {
       {/* Active MT5 Status Banner */}
       {mt5Info?.login && (
         <div style={{
-          background: 'rgba(16, 185, 129, 0.08)',
-          border: '1px solid rgba(16, 185, 129, 0.25)',
+          background: mt5Info.terminal_synced ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+          border: `1px solid ${mt5Info.terminal_synced ? 'rgba(16, 185, 129, 0.25)' : 'rgba(245, 158, 11, 0.28)'}`,
           borderRadius: '14px',
           padding: '14px 18px',
           display: 'flex',
@@ -221,12 +225,16 @@ export default function Accounts({ session }) {
           gap: '12px'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <PlugZap size={18} color="#10b981" />
+            <PlugZap size={18} color={mt5Info.terminal_synced ? '#10b981' : '#f59e0b'} />
             <span style={{ fontSize: '13px', color: '#94a3b8' }}>
-              <strong style={{ color: '#ffffff' }}>MT5 Terminal Connected</strong> — Login {mt5Info.login} on {mt5Info.server}
+              <strong style={{ color: '#ffffff' }}>
+                {mt5Info.terminal_synced ? 'MT5 Terminal Synced & Ready' : 'Account Linked (MT5 Desktop Not Synced)'}
+              </strong>{' '}
+              — Login #{mt5Info.login} on {mt5Info.server}
+              {!mt5Info.terminal_synced && ' · Log into this login inside MT5 Desktop to execute trades.'}
             </span>
           </div>
-          <span style={{ fontSize: '14px', fontWeight: '700', color: '#10b981' }}>
+          <span style={{ fontSize: '14px', fontWeight: '700', color: mt5Info.terminal_synced ? '#10b981' : '#f59e0b' }}>
             ${mt5Info.balance?.toLocaleString()} {mt5Info.currency || 'USD'}
           </span>
         </div>

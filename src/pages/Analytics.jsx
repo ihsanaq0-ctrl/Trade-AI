@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   TrendingUp, DollarSign, Target, BarChart3,
-  ArrowUpRight, ArrowDownRight, AlertCircle, Calendar
+  ArrowUpRight, AlertCircle, RefreshCw
 } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis,
@@ -22,9 +22,10 @@ export default function Analytics({ session }) {
   const [monthly, setMonthly] = useState([])
   const [trades, setTrades] = useState([])
   const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
   const [apiError, setApiError] = useState(null)
 
-  const getDateRange = (tf) => {
+  const getDateRange = useCallback((tf) => {
     if (tf === 'ALL') return {}
     const now = new Date()
     const from = new Date()
@@ -37,30 +38,47 @@ export default function Analytics({ session }) {
       from_date: from.toISOString(),
       to_date: now.toISOString()
     }
-  }
+  }, [])
 
-  useEffect(() => {
+  const loadSummary = useCallback((cancelledRef = { current: false }) => {
     if (!session?.access_token) {
       setLoading(false)
-      return
+      return Promise.resolve()
     }
-
+    setLoading(true)
     const headers = { 'Authorization': `Bearer ${session.access_token}` }
     const range = getDateRange(timeframe)
     const params = new URLSearchParams()
     if (range.from_date) params.set('from_date', range.from_date)
     if (range.to_date) params.set('to_date', range.to_date)
-    const qStr = params.toString() ? `?${params.toString()}` : ''
+    params.set('limit', '100')
+    const qStr = `?${params.toString()}`
 
-    Promise.all([
-      api.get(`/api/analytics/overview${qStr}`, { headers }).catch(() => null),
-      api.get(`/api/analytics/equity-curve${qStr}`, { headers }).catch(() => null),
-      api.get(`/api/analytics/by-strategy${qStr}`, { headers }).catch(() => null),
-      api.get(`/api/analytics/by-pair${qStr}`, { headers }).catch(() => null),
-      api.get('/api/analytics/monthly', { headers }).catch(() => null),
-      api.get('/api/trades?limit=100', { headers }).catch(() => null),
-    ]).then(([s, eq, strat, pair, mon, tr]) => {
-      if (s === null && eq === null && tr === null) {
+    return api.get(`/api/analytics/summary${qStr}`, { headers })
+      .then((summary) => {
+        if (cancelledRef.current) return
+        setApiError(null)
+        const s = summary?.overview || {}
+        setStats({
+          total_trades: s.total_trades || 0,
+          winning_trades: s.winning_trades || 0,
+          losing_trades: s.losing_trades || 0,
+          win_rate: s.win_rate || 0,
+          total_profit: s.total_profit || 0,
+          gross_profit: s.gross_profit || 0,
+          gross_loss: s.gross_loss || 0,
+          profit_factor: s.profit_factor || 0,
+          avg_profit: s.avg_profit || 0,
+          avg_pips: s.avg_pips || 0,
+        })
+        setEquityCurve(Array.isArray(summary?.equity_curve) ? summary.equity_curve : [])
+        setByStrategy(Array.isArray(summary?.by_strategy) ? summary.by_strategy : [])
+        setByPair(Array.isArray(summary?.by_pair) ? summary.by_pair : [])
+        setMonthly(Array.isArray(summary?.monthly) ? summary.monthly : [])
+        setTrades(Array.isArray(summary?.trades) ? summary.trades : [])
+      })
+      .catch(() => {
+        if (cancelledRef.current) return
         setApiError('Backend offline')
         setStats({
           total_trades: 0,
@@ -76,20 +94,33 @@ export default function Analytics({ session }) {
         })
         setEquityCurve([])
         setByStrategy([])
+        setByPair([])
         setMonthly([])
-      } else {
-        setApiError(null)
-        setStats(s && !s.detail ? s : { total_trades: 0, winning_trades: 0, losing_trades: 0, win_rate: 0, total_profit: 0, gross_profit: 0, gross_loss: 0, profit_factor: 0, avg_profit: 0, avg_pips: 0 })
-        setEquityCurve(Array.isArray(eq) ? eq : [])
-        setByStrategy(Array.isArray(strat) ? strat : [])
-        setByPair(Array.isArray(pair) ? pair : [])
-        setMonthly(Array.isArray(mon) ? mon : [])
-        setTrades(tr && tr.trades ? tr.trades : [])
-      }
-    }).catch(() => {
-      setApiError('Notice: Live backend synchronization is pending')
-    }).finally(() => setLoading(false))
-  }, [session, timeframe])
+        setTrades([])
+      })
+      .finally(() => {
+        if (!cancelledRef.current) setLoading(false)
+      })
+  }, [session, timeframe, getDateRange])
+
+  useEffect(() => {
+    const ref = { current: false }
+    loadSummary(ref)
+    return () => { ref.current = true }
+  }, [loadSummary])
+
+  const handleSyncMt5 = async () => {
+    if (!session?.access_token) return
+    setSyncing(true)
+    try {
+      await api.post('/api/trades/sync-mt5', {}, { headers: { Authorization: `Bearer ${session.access_token}` } })
+      await loadSummary()
+    } catch {
+      // ignore if MT5 offline
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const winCount = stats?.winning_trades || 0
   const lossCount = stats?.losing_trades || 0
@@ -168,34 +199,58 @@ export default function Analytics({ session }) {
           </p>
         </div>
 
-        {/* Timeframe pill selector */}
-        <div style={{
-          display: 'flex',
-          background: '#131722',
-          border: '1px solid #1c2233',
-          borderRadius: '12px',
-          padding: '4px',
-          gap: '4px'
-        }}>
-          {timeframes.map(t => (
-            <button
-              key={t}
-              onClick={() => setTimeframe(t)}
-              style={{
-                padding: '6px 14px',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontWeight: '600',
-                fontSize: '12px',
-                background: timeframe === t ? '#3b5bf5' : 'transparent',
-                color: timeframe === t ? '#ffffff' : '#64748b',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              {t}
-            </button>
-          ))}
+        {/* Right controls: Sync MT5 + Timeframe pill selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <button
+            onClick={handleSyncMt5}
+            disabled={syncing}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              background: '#131722',
+              border: '1px solid #1c2233',
+              borderRadius: '10px',
+              color: '#94a3b8',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: syncing ? 'not-allowed' : 'pointer'
+            }}
+            title="Reconcile closed MT5 trades into Analytics"
+          >
+            <RefreshCw size={13} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} />
+            <span>{syncing ? 'Syncing...' : 'Sync MT5 Deals'}</span>
+          </button>
+
+          <div style={{
+            display: 'flex',
+            background: '#131722',
+            border: '1px solid #1c2233',
+            borderRadius: '12px',
+            padding: '4px',
+            gap: '4px'
+          }}>
+            {timeframes.map(t => (
+              <button
+                key={t}
+                onClick={() => setTimeframe(t)}
+                style={{
+                  padding: '6px 14px',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: '600',
+                  fontSize: '12px',
+                  background: timeframe === t ? '#3b5bf5' : 'transparent',
+                  color: timeframe === t ? '#ffffff' : '#64748b',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

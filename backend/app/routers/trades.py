@@ -1,14 +1,16 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.database import supabase
 from app.middleware import get_current_user
 from app.schemas.trades import TradeCloseRequest, TradeModifySlRequest, TradePartialCloseRequest, TradeOpenRequest
 from app.services import metaapi_service as mt5
 from datetime import datetime
+from uuid import uuid4
 import logging
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/trades", tags=["trades"])
+
 
 @router.get("")
 @router.get("/")
@@ -21,15 +23,18 @@ async def list_trades(
     pair: str = None,
     symbol: str = None,
 ):
-    query = supabase.table("trades").select("*", count="exact").eq("user_id", user["sub"])
-    if status:
-        query = query.eq("status", status)
-    if strategy:
-        query = query.eq("strategy", strategy)
-    target_symbol = symbol or pair
-    if target_symbol:
-        query = query.eq("symbol", target_symbol)
-    result = query.order("opened_at", desc=True).range(offset, offset + limit - 1).execute()
+    def _q():
+        query = supabase.table("trades").select("*", count="exact").eq("user_id", user["sub"])
+        if status:
+            query = query.eq("status", status)
+        if strategy:
+            query = query.eq("strategy", strategy)
+        target_symbol = symbol or pair
+        if target_symbol:
+            query = query.eq("symbol", target_symbol)
+        return query.order("opened_at", desc=True).range(offset, offset + limit - 1).execute()
+
+    result = await asyncio.to_thread(_q)
     return {"trades": result.data or [], "total": result.count or 0}
 
 
@@ -38,15 +43,19 @@ async def open_manual_trade(data: TradeOpenRequest, user=Depends(get_current_use
     """Open a manual market trade via MT5 terminal and persist record."""
     if data.lot_size <= 0:
         raise HTTPException(status_code=400, detail="Lot size must be greater than 0")
-    
+
     order_type = data.type.upper()
     if order_type not in ["BUY", "SELL"]:
         raise HTTPException(status_code=400, detail="Trade type must be BUY or SELL")
 
     clean_symbol = data.symbol.replace("/", "").replace(" ", "").strip().upper()
 
-    # Identify user's connected MT5 account
-    acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+    acc_res, terminal_info = await asyncio.gather(
+        asyncio.to_thread(
+            lambda: supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+        ),
+        mt5.get_account_info(""),
+    )
     if not acc_res.data:
         raise HTTPException(
             status_code=400,
@@ -56,18 +65,14 @@ async def open_manual_trade(data: TradeOpenRequest, user=Depends(get_current_use
     user_acc = acc_res.data[0]
     account_id = user_acc["id"]
     user_login = str(user_acc.get("login", "")).strip()
-
-    # Verify MT5 terminal is logged into THIS user's account
-    terminal_info = await mt5.get_account_info("")
     terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
 
     if not terminal_login or terminal_login != user_login:
         raise HTTPException(
             status_code=400,
-            detail=f"Security alert: MT5 Desktop is currently logged into account #{terminal_login or 'None'}, but your connected account is #{user_login}. Please log into account #{user_login} on MT5 Desktop first."
+            detail=f"Security alert: MetaTrader 5 Desktop is not synced with your connected account #{user_login}. Please log into #{user_login} on MT5 Desktop first."
         )
 
-    # Send order to MT5
     result = await mt5.place_order(
         account_id=account_id,
         pair=clean_symbol,
@@ -86,9 +91,9 @@ async def open_manual_trade(data: TradeOpenRequest, user=Depends(get_current_use
     ticket_val = str(result.get("ticket"))
     exec_price = float(result.get("price", 0))
 
-    # Persist in Supabase trades table
     try:
         trade_record = {
+            "id": str(uuid4()),
             "user_id": user["sub"],
             "account_id": account_id or None,
             "bot_id": None,
@@ -104,10 +109,14 @@ async def open_manual_trade(data: TradeOpenRequest, user=Depends(get_current_use
             "opened_at": opened_at,
         }
         try:
-            supabase.table("trades").insert({**trade_record, "ticket": ticket_val}).execute()
+            await asyncio.to_thread(
+                lambda: supabase.table("trades").insert({**trade_record, "ticket": ticket_val}).execute()
+            )
         except Exception as col_err:
             if "ticket" in str(col_err).lower():
-                supabase.table("trades").insert(trade_record).execute()
+                await asyncio.to_thread(
+                    lambda: supabase.table("trades").insert(trade_record).execute()
+                )
             else:
                 raise col_err
     except Exception as e:
@@ -131,14 +140,16 @@ async def open_manual_trade(data: TradeOpenRequest, user=Depends(get_current_use
 async def get_live_positions(symbol: str = None, user=Depends(get_current_user)):
     """Fetch live open positions directly from MT5 terminal for the authenticated user's account."""
     try:
-        acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+        acc_res, terminal_info = await asyncio.gather(
+            asyncio.to_thread(
+                lambda: supabase.table("accounts").select("login").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+            ),
+            mt5.get_account_info(""),
+        )
         if not acc_res.data:
             return {"positions": []}
 
-        user_acc = acc_res.data[0]
-        user_login = str(user_acc.get("login", "")).strip()
-
-        terminal_info = await mt5.get_account_info("")
+        user_login = str(acc_res.data[0].get("login", "")).strip()
         terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
 
         if not terminal_login or terminal_login != user_login:
@@ -153,17 +164,65 @@ async def get_live_positions(symbol: str = None, user=Depends(get_current_user))
         return {"positions": [], "error": str(e)}
 
 
+@router.post("/sync-mt5")
+async def sync_closed_trades_from_mt5(user=Depends(get_current_user)):
+    """Reconcile any DB 'open' trades that already hit SL/TP or were closed directly in MT5 Desktop."""
+    try:
+        acc_res, terminal_info = await asyncio.gather(
+            asyncio.to_thread(
+                lambda: supabase.table("accounts").select("login").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+            ),
+            mt5.get_account_info(""),
+        )
+        if not acc_res.data:
+            return {"synced": 0, "reason": "no_connected_account"}
+
+        user_login = str(acc_res.data[0].get("login", "")).strip()
+        terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+        if not terminal_login or terminal_login != user_login:
+            return {"synced": 0, "reason": "terminal_not_synced"}
+
+        open_db_res, mt5_positions = await asyncio.gather(
+            asyncio.to_thread(
+                lambda: supabase.table("trades").select("id, ticket").eq("user_id", user["sub"]).eq("status", "open").execute()
+            ),
+            mt5.get_positions(""),
+        )
+
+        active_tickets = {str(p["ticket"]) for p in (mt5_positions or [])}
+        synced = 0
+        for row in (open_db_res.data or []):
+            t_str = str(row.get("ticket") or "").strip()
+            if not t_str or not t_str.isdigit() or t_str in active_tickets:
+                continue
+            profit = await mt5.get_history_deal_profit(int(t_str))
+            await asyncio.to_thread(
+                lambda rid=row["id"], pr=profit: supabase.table("trades").update({
+                    "status": "closed",
+                    "closed_at": datetime.utcnow().isoformat(),
+                    "profit": pr,
+                }).eq("id", rid).execute()
+            )
+            synced += 1
+        return {"synced": synced}
+    except Exception as e:
+        logger.debug(f"sync_closed_trades_from_mt5 error: {e}")
+        return {"synced": 0}
+
+
 @router.post("/close")
 async def close_trade(data: TradeCloseRequest, user=Depends(get_current_user)):
     """Close an open trade by ticket number via MT5."""
-    acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+    acc_res, terminal_info = await asyncio.gather(
+        asyncio.to_thread(
+            lambda: supabase.table("accounts").select("login").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+        ),
+        mt5.get_account_info(""),
+    )
     if not acc_res.data:
         raise HTTPException(status_code=403, detail="No connected account found for this user")
 
-    user_acc = acc_res.data[0]
-    user_login = str(user_acc.get("login", "")).strip()
-
-    terminal_info = await mt5.get_account_info("")
+    user_login = str(acc_res.data[0].get("login", "")).strip()
     terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
 
     if not terminal_login or terminal_login != user_login:
@@ -179,14 +238,15 @@ async def close_trade(data: TradeCloseRequest, user=Depends(get_current_user)):
     except Exception:
         pass
 
-    # Mark the trade as closed in the local database using its ticket.
     try:
-        supabase.table("trades").update({
-            "status": "closed",
-            "closed_at": datetime.utcnow().isoformat(),
-            "close_price": result.get("price"),
-            "profit": realized_profit,
-        }).eq("user_id", user["sub"]).eq("ticket", str(data.ticket)).execute()
+        await asyncio.to_thread(
+            lambda: supabase.table("trades").update({
+                "status": "closed",
+                "closed_at": datetime.utcnow().isoformat(),
+                "close_price": result.get("price"),
+                "profit": realized_profit,
+            }).eq("user_id", user["sub"]).eq("ticket", str(data.ticket)).execute()
+        )
     except Exception as e:
         logger.error(f"Failed to update closed trade in database: {e}")
 
@@ -203,15 +263,17 @@ async def modify_sl_trade(data: TradeModifySlRequest, user=Depends(get_current_u
     """Modify stop loss and/or take profit on an open trade via MT5."""
     if data.stop_loss is None and data.take_profit is None:
         raise HTTPException(status_code=400, detail="At least one of stop_loss or take_profit required")
-        
-    acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+
+    acc_res, terminal_info = await asyncio.gather(
+        asyncio.to_thread(
+            lambda: supabase.table("accounts").select("login").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+        ),
+        mt5.get_account_info(""),
+    )
     if not acc_res.data:
         raise HTTPException(status_code=403, detail="No connected account found for this user")
 
-    user_acc = acc_res.data[0]
-    user_login = str(user_acc.get("login", "")).strip()
-
-    terminal_info = await mt5.get_account_info("")
+    user_login = str(acc_res.data[0].get("login", "")).strip()
     terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
 
     if not terminal_login or terminal_login != user_login:
@@ -223,20 +285,23 @@ async def modify_sl_trade(data: TradeModifySlRequest, user=Depends(get_current_u
         raise HTTPException(status_code=400, detail=result.get("error", "Modify failed"))
     return {"success": True, "ticket": data.ticket, "new_sl": data.stop_loss, "new_tp": data.take_profit}
 
+
 @router.post("/partial-close")
 async def partial_close_trade(data: TradePartialCloseRequest, user=Depends(get_current_user)):
     """Close a percentage of an open trade by ticket number via MT5."""
     if data.close_pct <= 0 or data.close_pct > 1:
         raise HTTPException(status_code=400, detail="close_pct must be in (0, 1]")
-        
-    acc_res = supabase.table("accounts").select("*").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+
+    acc_res, terminal_info = await asyncio.gather(
+        asyncio.to_thread(
+            lambda: supabase.table("accounts").select("login").eq("user_id", user["sub"]).eq("status", "connected").limit(1).execute()
+        ),
+        mt5.get_account_info(""),
+    )
     if not acc_res.data:
         raise HTTPException(status_code=403, detail="No connected account found for this user")
 
-    user_acc = acc_res.data[0]
-    user_login = str(user_acc.get("login", "")).strip()
-
-    terminal_info = await mt5.get_account_info("")
+    user_login = str(acc_res.data[0].get("login", "")).strip()
     terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
 
     if not terminal_login or terminal_login != user_login:

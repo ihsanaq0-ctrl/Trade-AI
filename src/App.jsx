@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { supabase } from './supabase'
 import Sidebar from './components/Sidebar'
 import Navbar from './components/Navbar'
@@ -11,9 +11,11 @@ import Accounts from './pages/Accounts'
 import Admin from './pages/Admin'
 import Settings from './pages/Settings'
 import Profile from './pages/Profile'
+import Pricing from './pages/Pricing'
 import Login from './pages/Login'
 import ConnectionBanner from './components/ConnectionBanner'
 import { ToastProvider } from './components/Toast'
+import api from './api'
 import './index.css'
 
 function ProtectedRoute({ session, children }) {
@@ -23,27 +25,71 @@ function ProtectedRoute({ session, children }) {
   return children
 }
 
+// Clear stale unscoped or cross-user browser localStorage whenever user ID switches
+function syncUserLocalStorage(userId) {
+  try {
+    const prevUid = localStorage.getItem('tradeai_active_uid')
+    if (prevUid && userId && prevUid !== userId) {
+      localStorage.removeItem('trade_profile_name')
+      localStorage.removeItem('favPairs')
+      localStorage.removeItem('trade_bot_risk_defaults')
+    }
+    if (userId) {
+      localStorage.setItem('tradeai_active_uid', userId)
+    } else {
+      localStorage.removeItem('tradeai_active_uid')
+      localStorage.removeItem('trade_profile_name')
+      localStorage.removeItem('favPairs')
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 function Layout() {
   const location = useLocation()
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [userPlan, setUserPlan] = useState('free')
   const isLoginPage = location.pathname === '/login'
 
+  const fetchUserPlan = useCallback(async (activeSession) => {
+    const s = activeSession ?? session
+    if (!s?.access_token) {
+      setUserPlan('free')
+      return
+    }
+    try {
+      const res = await api.get('/api/payments/license', {
+        headers: { Authorization: `Bearer ${s.access_token}` }
+      })
+      setUserPlan((res?.plan || 'free').toLowerCase())
+    } catch {
+      setUserPlan('free')
+    }
+  }, [session])
+
   useEffect(() => {
-    // 1. Check active Supabase session
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
+      syncUserLocalStorage(activeSession?.user?.id || null)
       setSession(activeSession || null)
       setLoading(false)
+      if (activeSession) fetchUserPlan(activeSession)
     }).catch((err) => {
       console.error('Session retrieval error:', err)
       setSession(null)
       setLoading(false)
     })
 
-    // 2. Listen to real auth state changes (login, token refresh, logout)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      syncUserLocalStorage(newSession?.user?.id || null)
       setSession(newSession || null)
+      if (newSession) {
+        fetchUserPlan(newSession)
+      } else {
+        setUserPlan('free')
+      }
     })
 
     return () => subscription.unsubscribe()
@@ -66,16 +112,20 @@ function Layout() {
     )
   }
 
+  const uidKey = session?.user?.id || 'guest'
+
   return (
     <div style={{ display: 'flex', height: '100vh', background: '#0c0e15', overflow: 'hidden' }}>
       {!isLoginPage && session && (
         <Sidebar
+          key={`sidebar-${uidKey}`}
           session={session}
+          userPlan={userPlan}
           mobileOpen={mobileOpen}
           onCloseMobile={() => setMobileOpen(false)}
         />
       )}
-      
+
       <div style={{
         flex: 1,
         overflow: 'auto',
@@ -86,26 +136,29 @@ function Layout() {
         {!isLoginPage && session && (
           <>
             <Navbar
+              key={`navbar-${uidKey}`}
               session={session}
+              userPlan={userPlan}
               onToggleMobileSidebar={() => setMobileOpen(!mobileOpen)}
             />
-            <ConnectionBanner />
+            <ConnectionBanner key={`conn-${uidKey}`} />
           </>
         )}
-        
+
         <Routes>
           <Route path="/" element={<Navigate to={session ? '/dashboard' : '/login'} replace />} />
           <Route path="/login" element={!session ? <Login /> : <Navigate to="/dashboard" replace />} />
-          
-          <Route path="/dashboard" element={<ProtectedRoute session={session}><Dashboard key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
-          <Route path="/markets" element={<ProtectedRoute session={session}><Markets key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
-          <Route path="/bot" element={<ProtectedRoute session={session}><Bot key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
-          <Route path="/analytics" element={<ProtectedRoute session={session}><Analytics key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
-          <Route path="/accounts" element={<ProtectedRoute session={session}><Accounts key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
-          <Route path="/settings" element={<ProtectedRoute session={session}><Settings key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
-          <Route path="/profile" element={<ProtectedRoute session={session}><Profile key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
-          <Route path="/admin" element={<ProtectedRoute session={session}><Admin key={session?.user?.id || 'guest'} session={session} /></ProtectedRoute>} />
-          
+
+          <Route path="/dashboard" element={<ProtectedRoute session={session}><Dashboard key={uidKey} session={session} /></ProtectedRoute>} />
+          <Route path="/markets" element={<ProtectedRoute session={session}><Markets key={uidKey} session={session} /></ProtectedRoute>} />
+          <Route path="/bot" element={<ProtectedRoute session={session}><Bot key={uidKey} session={session} userPlan={userPlan} /></ProtectedRoute>} />
+          <Route path="/analytics" element={<ProtectedRoute session={session}><Analytics key={uidKey} session={session} /></ProtectedRoute>} />
+          <Route path="/accounts" element={<ProtectedRoute session={session}><Accounts key={uidKey} session={session} /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute session={session}><Settings key={uidKey} session={session} /></ProtectedRoute>} />
+          <Route path="/profile" element={<ProtectedRoute session={session}><Profile key={uidKey} session={session} userPlan={userPlan} /></ProtectedRoute>} />
+          <Route path="/pricing" element={<ProtectedRoute session={session}><Pricing key={uidKey} session={session} userPlan={userPlan} onPlanUpdated={() => fetchUserPlan(session)} /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute session={session}><Admin key={uidKey} session={session} /></ProtectedRoute>} />
+
           <Route path="*" element={<Navigate to={session ? '/dashboard' : '/login'} replace />} />
         </Routes>
       </div>

@@ -2,15 +2,14 @@ import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   User, Mail, Shield, Key, Calendar, Clock,
-  CheckCircle2, Copy, Check, Sparkles, ExternalLink,
-  Briefcase, Activity, Settings as SettingsIcon, LogOut,
-  ChevronRight, ArrowLeft, Save
+  CheckCircle2, Copy, Check, Sparkles, ArrowUpRight,
+  Settings as SettingsIcon, LogOut, ArrowLeft, Save
 } from 'lucide-react'
 import { supabase } from '../supabase'
 import { useToast } from '../components/Toast'
 import api from '../api'
 
-export default function Profile({ session }) {
+export default function Profile({ session, userPlan: propPlan = 'free' }) {
   const toast = useToast()
   const navigate = useNavigate()
 
@@ -27,25 +26,51 @@ export default function Profile({ session }) {
   const [saving, setSaving] = useState(false)
   const [accountsCount, setAccountsCount] = useState(0)
   const [activeAccount, setActiveAccount] = useState(null)
-  const [currentPlan, setCurrentPlan] = useState('free')
+  const [currentPlan, setCurrentPlan] = useState((propPlan || 'free').toLowerCase())
 
   useEffect(() => {
+    setCurrentPlan((propPlan || 'free').toLowerCase())
+  }, [propPlan])
+
+  useEffect(() => {
+    if (!session?.user) return
+    const meta = session.user.user_metadata || {}
+    const emailFallback = session.user.email ? session.user.email.split('@')[0] : 'Trader'
+
+    setDisplayName(meta.full_name || emailFallback)
+    setBio(meta.bio || 'Algorithmic Forex & Crypto Trader')
+    setTradingStyle(meta.trading_style || 'Algorithmic / Quantitative')
+    setTimezone(meta.timezone || 'UTC (GMT+0)')
+
+    // Also inspect public.profiles row for canonical name/plan (never stale cache)
+    supabase.from('profiles')
+      .select('name, plan')
+      .eq('id', session.user.id)
+      .maybeSingle()
+      .then(({ data: prof }) => {
+        if (prof?.name && !meta.full_name) {
+          setDisplayName(prof.name)
+        }
+        if (prof?.plan) {
+          setCurrentPlan(prof.plan.toLowerCase())
+        }
+      })
+      .catch(() => {})
+
     if (!session?.access_token) return
     const headers = { 'Authorization': `Bearer ${session.access_token}` }
 
-    // Fetch license/plan info
     api.get('/api/payments/license', { headers })
       .then(d => {
         if (d && d.plan) setCurrentPlan(d.plan.toLowerCase())
       })
       .catch(() => setCurrentPlan('free'))
 
-    // Fetch accounts info
     api.get('/api/accounts', { headers })
       .then(d => {
         if (Array.isArray(d)) setAccountsCount(d.length)
       })
-      .catch(() => {})
+      .catch(() => setAccountsCount(0))
 
     api.get('/api/markets/active-account', { headers })
       .then(d => {
@@ -66,15 +91,25 @@ export default function Profile({ session }) {
   const handleSaveProfile = async () => {
     setSaving(true)
     try {
+      const cleanName = displayName.trim() || (user?.email ? user.email.split('@')[0] : 'Trader')
       const { error } = await supabase.auth.updateUser({
         data: {
-          full_name: displayName,
+          full_name: cleanName,
           bio,
           trading_style: tradingStyle,
           timezone
         }
       })
       if (error) throw error
+
+      if (user?.id) {
+        await supabase.from('profiles').upsert([{
+          id: user.id,
+          name: cleanName,
+          email: user.email
+        }], { onConflict: 'id' })
+      }
+      await supabase.auth.refreshSession().catch(() => {})
       toast.success('Profile updated successfully')
     } catch (err) {
       toast.error(`Failed to update profile: ${err.message}`)
@@ -96,18 +131,29 @@ export default function Profile({ session }) {
 
   const handleLogout = async () => {
     try {
+      const uid = user?.id
+      if (uid) {
+        localStorage.removeItem(`trade_profile_name_${uid}`)
+        localStorage.removeItem(`trade_bot_risk_defaults_${uid}`)
+      }
       localStorage.removeItem('trade_profile_name')
       localStorage.removeItem('favPairs')
+      localStorage.removeItem('tradeai_active_uid')
     } catch {}
     await supabase.auth.signOut()
     navigate('/login')
   }
 
   const userInitial = displayName.charAt(0).toUpperCase() || 'T'
-  const userRole = user?.app_metadata?.role || 'Premium Member'
+  const planBadge = currentPlan === 'elite'
+    ? { label: 'ELITE VIP', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.15)', border: 'rgba(245, 158, 11, 0.35)' }
+    : currentPlan === 'pro'
+    ? { label: 'PRO TRADER', color: '#00d4ff', bg: 'rgba(0, 212, 255, 0.15)', border: 'rgba(0, 212, 255, 0.35)' }
+    : { label: 'FREE PLAN', color: '#10b981', bg: 'rgba(16, 185, 129, 0.15)', border: 'rgba(16, 185, 129, 0.35)' }
+
   const createdAtFormatted = user?.created_at
     ? new Date(user.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
-    : 'October 2026'
+    : 'Recent member'
   const lastSignInFormatted = user?.last_sign_in_at
     ? new Date(user.last_sign_in_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : 'Recent session'
@@ -202,7 +248,6 @@ export default function Profile({ session }) {
         overflow: 'hidden',
         background: 'linear-gradient(135deg, #131722 0%, #171c2b 100%)'
       }}>
-        {/* Glow decoration */}
         <div style={{
           position: 'absolute',
           top: '-60px',
@@ -260,38 +305,35 @@ export default function Profile({ session }) {
               <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#ffffff', margin: 0, letterSpacing: '-0.3px' }}>
                 {displayName}
               </h1>
-              <span style={{
-                background: 'rgba(16, 185, 129, 0.12)',
-                border: '1px solid rgba(16, 185, 129, 0.25)',
-                color: '#10b981',
-                padding: '3px 10px',
-                borderRadius: '20px',
-                fontSize: '11px',
-                fontWeight: 600,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}>
-                <Sparkles size={11} /> {userRole}
-              </span>
-              <span style={{
-                background: currentPlan === 'elite' ? 'rgba(245, 158, 11, 0.15)' : currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.15)' : 'rgba(16, 185, 129, 0.15)',
-                border: `1px solid ${currentPlan === 'elite' ? 'rgba(245, 158, 11, 0.3)' : currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`,
-                color: currentPlan === 'elite' ? '#f59e0b' : currentPlan === 'pro' ? '#00d4ff' : '#10b981',
-                padding: '3px 10px',
-                borderRadius: '20px',
-                fontSize: '11px',
-                fontWeight: 700,
-                letterSpacing: '0.04em'
-              }}>
-                {currentPlan.toUpperCase()} PLAN
-              </span>
+
+              {/* Single accurate, clickable Plan Badge */}
+              <Link
+                to="/pricing?plan=pro"
+                style={{
+                  background: planBadge.bg,
+                  border: `1px solid ${planBadge.border}`,
+                  color: planBadge.color,
+                  padding: '3px 10px',
+                  borderRadius: '20px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  textDecoration: 'none',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+              >
+                <Sparkles size={11} />
+                {planBadge.label}
+                {currentPlan === 'free' && <span style={{ color: '#fff', marginLeft: '2px' }}>· Upgrade →</span>}
+              </Link>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', fontSize: '13px', color: '#94a3b8' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Mail size={14} color="#64748b" />
-                <span>{user?.email || 'trader@tradeaipro.com'}</span>
+                <span>{user?.email || ''}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Calendar size={14} color="#64748b" />
@@ -310,7 +352,7 @@ export default function Profile({ session }) {
                 fontSize: '11px',
                 color: '#94a3b8'
               }}>
-                {user?.id ? `${user.id.slice(0, 8)}...${user.id.slice(-6)}` : '0000-0000'}
+                {user?.id ? `${user.id.slice(0, 8)}...${user.id.slice(-6)}` : '—'}
               </code>
               <button
                 onClick={handleCopyUid}
@@ -373,7 +415,7 @@ export default function Profile({ session }) {
                 type="text"
                 value={displayName}
                 onChange={e => setDisplayName(e.target.value)}
-                placeholder="e.g. Ihsan"
+                placeholder="Your trader name"
               />
             </div>
 
@@ -480,7 +522,7 @@ export default function Profile({ session }) {
             </div>
             <div>
               <h2 style={{ fontSize: '15px', fontWeight: '700', color: '#ffffff', margin: 0 }}>
-                Security & Account Status
+                Security &amp; Account Status
               </h2>
               <div style={{ fontSize: '12px', color: '#94a3b8' }}>
                 Active session safeguards and cryptographic credentials
@@ -545,8 +587,17 @@ export default function Profile({ session }) {
             }}>
               <div>
                 <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>Connected MetaTrader 5</div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#f8fafc', marginTop: '2px' }}>
-                  {activeAccount ? `Account #${activeAccount.login} (${activeAccount.server})` : `${accountsCount} accounts linked`}
+                <div style={{
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  color: activeAccount ? (activeAccount.terminal_synced ? '#10b981' : '#f59e0b') : '#94a3b8',
+                  marginTop: '2px'
+                }}>
+                  {activeAccount
+                    ? activeAccount.terminal_synced
+                      ? `Synced: #${activeAccount.login} (${activeAccount.server})`
+                      : `Linked #${activeAccount.login} (MT5 Desktop not synced)`
+                    : (accountsCount > 0 ? `${accountsCount} saved account(s) (disconnected)` : 'No MT5 account linked')}
                 </div>
               </div>
               <Link to="/accounts" style={{ color: '#3b5bf5', fontSize: '12px', textDecoration: 'none', fontWeight: 600 }}>
@@ -584,7 +635,7 @@ export default function Profile({ session }) {
         </div>
       </div>
 
-      {/* Membership & Subscription Plans */}
+      {/* Membership & Subscription Plans (All Cards Clickable -> /pricing) */}
       <div style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <div>
@@ -592,39 +643,50 @@ export default function Profile({ session }) {
               Trading Platform Membership Tiers
             </h3>
             <p style={{ fontSize: '12px', color: '#94a3b8', margin: '3px 0 0 0' }}>
-              Choose your plan to scale automated algorithmic execution across your MetaTrader accounts
+              Click any plan card to compare tiers, purchase Pro, or activate your license key
             </p>
           </div>
-          <span style={{
-            background: currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.15)' : 'rgba(16, 185, 129, 0.15)',
-            border: `1px solid ${currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`,
-            color: currentPlan === 'pro' ? '#00d4ff' : '#10b981',
-            padding: '4px 12px',
-            borderRadius: '20px',
-            fontSize: '11px',
-            fontWeight: 700
-          }}>
-            CURRENT PLAN: {currentPlan.toUpperCase()}
-          </span>
+          <Link
+            to="/pricing"
+            style={{
+              background: planBadge.bg,
+              border: `1px solid ${planBadge.border}`,
+              color: planBadge.color,
+              padding: '5px 12px',
+              borderRadius: '20px',
+              fontSize: '11px',
+              fontWeight: 700,
+              textDecoration: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            CURRENT PLAN: {currentPlan.toUpperCase()} <ArrowUpRight size={12} />
+          </Link>
         </div>
 
-        {/* 3 Tier Cards */}
+        {/* 3 Clickable Tier Cards */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
           gap: '16px'
         }}>
           {/* FREE PLAN */}
-          <div style={{
-            background: '#0c0e15',
-            border: `1px solid ${currentPlan === 'free' ? 'rgba(16, 185, 129, 0.4)' : '#1c2233'}`,
-            borderRadius: '12px',
-            padding: '20px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '14px',
-            position: 'relative'
-          }}>
+          <div
+            onClick={() => navigate('/pricing?plan=free')}
+            style={{
+              background: '#0c0e15',
+              border: `1px solid ${currentPlan === 'free' ? 'rgba(16, 185, 129, 0.45)' : '#1c2233'}`,
+              borderRadius: '12px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              position: 'relative',
+              cursor: 'pointer'
+            }}
+          >
             {currentPlan === 'free' && (
               <span style={{
                 position: 'absolute', top: '-10px', right: '14px',
@@ -635,16 +697,16 @@ export default function Profile({ session }) {
             <div>
               <div style={{ fontSize: '15px', fontWeight: '700', color: '#ffffff' }}>Free Starter</div>
               <div style={{ fontSize: '22px', fontWeight: '800', color: '#10b981', margin: '6px 0 2px 0' }}>$0 <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>/ forever</span></div>
-              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Basic algorithmic trading & manual station</p>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Basic algorithmic trading &amp; manual station</p>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#94a3b8' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#94a3b8', flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CheckCircle2 size={14} color="#10b981" />
                 <span><strong>1 Active Bot</strong> running at a time</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CheckCircle2 size={14} color="#10b981" />
-                <span>Classic Mode & Smart Money access</span>
+                <span>Classic Mode &amp; Smart Money access</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CheckCircle2 size={14} color="#10b981" />
@@ -655,31 +717,47 @@ export default function Profile({ session }) {
                 <span>Live MetaTrader 5 broker sync</span>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); navigate('/pricing?plan=free') }}
+              style={{
+                width: '100%', padding: '9px 12px', borderRadius: '8px',
+                background: '#131722', border: '1px solid #1c2233',
+                color: currentPlan === 'free' ? '#10b981' : '#94a3b8',
+                fontSize: '12px', fontWeight: 700, cursor: 'pointer'
+              }}
+            >
+              {currentPlan === 'free' ? 'Current Active Plan' : 'Included'}
+            </button>
           </div>
 
           {/* PRO PLAN */}
-          <div style={{
-            background: 'linear-gradient(180deg, rgba(0, 212, 255, 0.05) 0%, #0c0e15 100%)',
-            border: `1px solid ${currentPlan === 'pro' ? '#00d4ff' : 'rgba(0, 212, 255, 0.35)'}`,
-            borderRadius: '12px',
-            padding: '20px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '14px',
-            position: 'relative',
-            boxShadow: '0 0 25px rgba(0, 212, 255, 0.08)'
-          }}>
+          <div
+            onClick={() => navigate('/pricing?plan=pro')}
+            style={{
+              background: 'linear-gradient(180deg, rgba(0, 212, 255, 0.06) 0%, #0c0e15 100%)',
+              border: `1px solid ${currentPlan === 'pro' ? '#00d4ff' : 'rgba(0, 212, 255, 0.4)'}`,
+              borderRadius: '12px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              position: 'relative',
+              boxShadow: '0 0 25px rgba(0, 212, 255, 0.08)',
+              cursor: 'pointer'
+            }}
+          >
             <span style={{
               position: 'absolute', top: '-10px', right: '14px',
               background: '#00d4ff', color: '#0c0e15', fontSize: '10px', fontWeight: 800,
               padding: '2px 8px', borderRadius: '10px'
-            }}>POPULAR</span>
+            }}>{currentPlan === 'pro' ? 'ACTIVE' : 'POPULAR'}</span>
             <div>
               <div style={{ fontSize: '15px', fontWeight: '700', color: '#00d4ff' }}>Pro Trader</div>
               <div style={{ fontSize: '22px', fontWeight: '800', color: '#ffffff', margin: '6px 0 2px 0' }}>$29 <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>/ month</span></div>
-              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Unlocks PipStep Reversal EA & multi-bot execution</p>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Unlocks PipStep Reversal EA &amp; multi-bot execution</p>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#cbd5e1' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#cbd5e1', flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CheckCircle2 size={14} color="#00d4ff" />
                 <span><strong style={{ color: '#00d4ff' }}>PipStep Reversal EA</strong> (Full Access)</span>
@@ -690,39 +768,52 @@ export default function Profile({ session }) {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CheckCircle2 size={14} color="#00d4ff" />
-                <span>Dynamic Step Trailing SL & Reversal</span>
+                <span>Dynamic Step Trailing SL &amp; Reversal</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CheckCircle2 size={14} color="#00d4ff" />
                 <span>Up to <strong>3 Active Bots</strong> simultaneously</span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <CheckCircle2 size={14} color="#00d4ff" />
-                <span>Priority risk control & daily equity cap</span>
-              </div>
             </div>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); navigate('/pricing?plan=pro') }}
+              style={{
+                width: '100%', padding: '10px 12px', borderRadius: '8px',
+                background: currentPlan === 'pro' ? 'rgba(0, 212, 255, 0.14)' : 'linear-gradient(135deg, #00d4ff, #3b5bf5)',
+                border: currentPlan === 'pro' ? '1px solid rgba(0, 212, 255, 0.4)' : 'none',
+                color: currentPlan === 'pro' ? '#00d4ff' : '#ffffff',
+                fontSize: '12px', fontWeight: 700, cursor: 'pointer'
+              }}
+            >
+              {currentPlan === 'pro' ? 'Manage Pro Plan →' : 'Buy / Activate Pro →'}
+            </button>
           </div>
 
           {/* ELITE PLAN */}
-          <div style={{
-            background: '#0c0e15',
-            border: '1px solid rgba(245, 158, 11, 0.3)',
-            borderRadius: '12px',
-            padding: '20px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '14px',
-            opacity: 0.85
-          }}>
+          <div
+            onClick={() => navigate('/pricing?plan=elite')}
+            style={{
+              background: '#0c0e15',
+              border: '1px solid rgba(245, 158, 11, 0.3)',
+              borderRadius: '12px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              opacity: 0.9,
+              cursor: 'pointer'
+            }}
+          >
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ fontSize: '15px', fontWeight: '700', color: '#f59e0b' }}>Elite VIP</div>
                 <span style={{ fontSize: '10px', color: '#f59e0b', background: 'rgba(245, 158, 11, 0.15)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>COMING SOON</span>
               </div>
               <div style={{ fontSize: '22px', fontWeight: '800', color: '#ffffff', margin: '6px 0 2px 0' }}>$79 <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>/ month</span></div>
-              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Advanced AI consensus & multi-pair hedging</p>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Advanced AI consensus &amp; multi-pair hedging</p>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#94a3b8' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: '#94a3b8', flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CheckCircle2 size={14} color="#f59e0b" />
                 <span><strong>Other Advanced Bots</strong> (In development)</span>
@@ -740,6 +831,17 @@ export default function Profile({ session }) {
                 <span>Unlimited concurrent bot instances</span>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); navigate('/pricing?plan=elite') }}
+              style={{
+                width: '100%', padding: '9px 12px', borderRadius: '8px',
+                background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)',
+                color: '#f59e0b', fontSize: '12px', fontWeight: 700, cursor: 'pointer'
+              }}
+            >
+              View Elite Details →
+            </button>
           </div>
         </div>
       </div>

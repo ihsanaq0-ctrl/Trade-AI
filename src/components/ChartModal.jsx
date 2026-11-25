@@ -45,7 +45,7 @@ function generateFallbackCandles(basePrice, timeframe, count = 120) {
   return candles
 }
 
-export default function ChartModal({ pair, onClose }) {
+export default function ChartModal({ pair, session, onClose }) {
   const toast = useToast()
   const chartRef = useRef(null)
   const chartInstanceRef = useRef(null)
@@ -93,9 +93,10 @@ export default function ChartModal({ pair, onClose }) {
 
   const toFixed = (v) => (v !== null && v !== undefined && !isNaN(v)) ? Number(v).toFixed(decimals) : '--'
 
-  // 1. Fetch connected account info
+  // 1. Fetch connected account info scoped to active session
   useEffect(() => {
-    api.get('/api/markets/active-account')
+    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}
+    api.get('/api/markets/active-account', { headers })
       .then(data => {
         if (data && data.connected && data.login) {
           setAccountInfo(data)
@@ -104,7 +105,7 @@ export default function ChartModal({ pair, onClose }) {
         }
       })
       .catch(() => setAccountInfo(null))
-  }, [])
+  }, [session])
 
   // 2. Fetch live positions on this symbol
   const fetchPositions = useCallback(() => {
@@ -284,7 +285,11 @@ export default function ChartModal({ pair, onClose }) {
   // --- MANUAL TRADE EXECUTION HANDLER ---
   const handleExecuteTrade = async (type) => {
     if (!accountInfo || !accountInfo.connected || !accountInfo.login) {
-      toast.error('No trading account connected. Please connect your broker account in the Accounts tab before executing trades.')
+      toast.error('No trading account connected. Please connect your broker account in the Portfolio tab before executing trades.')
+      return
+    }
+    if (!accountInfo.terminal_synced) {
+      toast.error(`MT5 Desktop is not synced with #${accountInfo.login}. Please log into #${accountInfo.login} in MetaTrader 5 Desktop first.`)
       return
     }
 
@@ -510,7 +515,9 @@ export default function ChartModal({ pair, onClose }) {
               <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', gap: '8px' }}>
                 <span>{isCrypto ? 'Crypto Asset' : symbol.startsWith('X') ? 'Commodity' : 'Forex Major'}</span>
                 <span>•</span>
-                <span style={{ color: '#10b981' }}>Live Terminal Synced</span>
+                <span style={{ color: accountInfo?.terminal_synced ? '#10b981' : '#f59e0b' }}>
+                  {accountInfo?.terminal_synced ? 'Live Terminal Synced' : accountInfo?.connected ? 'Account Linked (Desktop Not Synced)' : 'Live Chart Feed (No Account Linked)'}
+                </span>
               </div>
             </div>
 
@@ -1087,8 +1094,8 @@ export default function ChartModal({ pair, onClose }) {
             justifyContent: 'space-between',
             padding: '8px 14px',
             borderRadius: '10px',
-            background: accountInfo?.connected ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)',
-            border: `1px solid ${accountInfo?.connected ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)'}`,
+            background: accountInfo?.connected && accountInfo?.terminal_synced ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+            border: `1px solid ${accountInfo?.connected && accountInfo?.terminal_synced ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.25)'}`,
             fontSize: '12px'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1096,16 +1103,20 @@ export default function ChartModal({ pair, onClose }) {
                 width: '8px',
                 height: '8px',
                 borderRadius: '50%',
-                background: accountInfo?.connected ? '#10b981' : '#f59e0b',
-                boxShadow: accountInfo?.connected ? '0 0 8px #10b981' : '0 0 8px #f59e0b'
+                background: accountInfo?.connected && accountInfo?.terminal_synced ? '#10b981' : '#f59e0b',
+                boxShadow: accountInfo?.connected && accountInfo?.terminal_synced ? '0 0 8px #10b981' : '0 0 8px #f59e0b'
               }} />
-              {accountInfo?.connected ? (
+              {accountInfo?.connected && accountInfo?.terminal_synced ? (
                 <span style={{ color: '#e2e8f0' }}>
                   Connected Account: <strong style={{ color: '#10b981' }}>#{accountInfo.login}</strong> ({accountInfo.server || 'MetaTrader 5'}) • Balance: <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#fff', fontWeight: 600 }}>${Number(accountInfo.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                 </span>
+              ) : accountInfo?.connected ? (
+                <span style={{ color: '#f59e0b' }}>
+                  Account <strong>#{accountInfo.login}</strong> linked, but MT5 Desktop is not logged into #{accountInfo.login}. Log into #{accountInfo.login} on MT5 Desktop to execute manual orders.
+                </span>
               ) : (
                 <span style={{ color: '#f59e0b' }}>
-                  ⚠️ No MT5 account connected. Go to <strong>Accounts</strong> tab to connect your trading account before executing orders.
+                  No MT5 account connected. Go to <strong>Portfolio</strong> tab to connect your trading account before executing orders.
                 </span>
               )}
             </div>

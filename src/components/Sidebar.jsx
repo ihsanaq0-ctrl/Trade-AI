@@ -1,8 +1,8 @@
-import { NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { NavLink, Link, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Briefcase, TrendingUp,
   BarChart2, Sparkles, HelpCircle,
-  Settings, ShieldCheck, LogOut, X
+  Settings, LogOut, X, Crown, ArrowUpRight
 } from 'lucide-react'
 import { supabase } from '../supabase'
 
@@ -12,17 +12,51 @@ const primaryNav = [
   { path: '/markets', icon: TrendingUp, label: 'Markets' },
   { path: '/analytics', icon: BarChart2, label: 'Analytics' },
   { path: '/bot', icon: Sparkles, label: 'AI Bots' },
-
+  { path: '/pricing', icon: Crown, label: 'Plans & Upgrade' },
 ]
 
-export default function Sidebar({ session, mobileOpen, onCloseMobile }) {
+export default function Sidebar({ session, userPlan = 'free', mobileOpen, onCloseMobile }) {
   const navigate = useNavigate()
   const location = useLocation()
 
+  const plan = (userPlan || 'free').toLowerCase()
+  const planMeta = plan === 'elite'
+    ? {
+        title: 'ELITE VIP',
+        desc: 'All AI desks & unlimited bots unlocked',
+        color: '#f59e0b',
+        bg: 'linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(234, 88, 12, 0.08))',
+        border: 'rgba(245, 158, 11, 0.35)',
+        cta: 'View Plan'
+      }
+    : plan === 'pro'
+    ? {
+        title: 'PRO TRADER',
+        desc: 'PipStep Reversal EA & 3 bots unlocked',
+        color: '#00d4ff',
+        bg: 'linear-gradient(135deg, rgba(0, 212, 255, 0.12), rgba(59, 91, 245, 0.08))',
+        border: 'rgba(0, 212, 255, 0.35)',
+        cta: 'Manage Plan'
+      }
+    : {
+        title: 'FREE PLAN',
+        desc: '1 active bot · Upgrade to unlock PipStep EA',
+        color: '#10b981',
+        bg: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(59, 91, 245, 0.08))',
+        border: 'rgba(59, 91, 245, 0.3)',
+        cta: 'Upgrade to Pro'
+      }
+
   const handleLogout = async () => {
     try {
+      const uid = session?.user?.id
+      if (uid) {
+        localStorage.removeItem(`trade_profile_name_${uid}`)
+        localStorage.removeItem(`trade_bot_risk_defaults_${uid}`)
+      }
       localStorage.removeItem('trade_profile_name')
       localStorage.removeItem('favPairs')
+      localStorage.removeItem('tradeai_active_uid')
     } catch {}
     await supabase.auth.signOut()
     navigate('/login')
@@ -68,7 +102,6 @@ export default function Sidebar({ session, mobileOpen, onCloseMobile }) {
           justifyContent: 'space-between'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            {/* Triangular Geometry Logo */}
             <div style={{
               width: '32px',
               height: '32px',
@@ -104,7 +137,6 @@ export default function Sidebar({ session, mobileOpen, onCloseMobile }) {
             </div>
           </div>
 
-          {/* Mobile close button */}
           <button
             onClick={onCloseMobile}
             className="mobile-close-btn"
@@ -168,31 +200,64 @@ export default function Sidebar({ session, mobileOpen, onCloseMobile }) {
           })}
         </nav>
 
-        {/* PRO Plan Badge */}
+        {/* Clickable Dynamic Plan Badge Card */}
         <div style={{ padding: '0 14px', marginBottom: '14px' }}>
-          <div style={{
-            background: 'linear-gradient(135deg, rgba(59, 91, 245, 0.08), rgba(139, 92, 246, 0.08))',
-            border: '1px solid rgba(59, 91, 245, 0.2)',
-            borderRadius: '12px',
-            padding: '14px 16px'
-          }}>
+          <Link
+            to="/pricing?plan=pro"
+            onClick={onCloseMobile}
+            style={{
+              display: 'block',
+              textDecoration: 'none',
+              background: planMeta.bg,
+              border: `1px solid ${planMeta.border}`,
+              borderRadius: '12px',
+              padding: '14px 16px',
+              cursor: 'pointer',
+              transition: 'transform 0.15s ease, border-color 0.15s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-1px)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)'
+            }}
+          >
             <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '4px'
+            }}>
+              <span style={{
+                fontSize: '11px',
+                color: planMeta.color,
+                fontWeight: '800',
+                letterSpacing: '0.5px'
+              }}>
+                {planMeta.title}
+              </span>
+              <ArrowUpRight size={13} color={planMeta.color} />
+            </div>
+            <div style={{
+              fontSize: '11.5px',
+              color: '#94a3b8',
+              lineHeight: 1.4,
+              marginBottom: '8px'
+            }}>
+              {planMeta.desc}
+            </div>
+            <div style={{
+              display: 'inline-block',
               fontSize: '11px',
-              color: '#818cf8',
-              fontWeight: '700',
-              letterSpacing: '0.5px',
-              marginBottom: '3px'
+              fontWeight: 700,
+              color: '#ffffff',
+              background: plan === 'free' ? '#3b5bf5' : 'rgba(255,255,255,0.08)',
+              padding: '4px 10px',
+              borderRadius: '6px'
             }}>
-              PRO PLAN
+              {planMeta.cta} →
             </div>
-            <div style={{
-              fontSize: '12px',
-              color: '#64748b',
-              lineHeight: 1.4
-            }}>
-              All AI strategies & analytics unlocked
-            </div>
-          </div>
+          </Link>
         </div>
 
         {/* Bottom Auxiliary Links */}
@@ -229,7 +294,7 @@ export default function Sidebar({ session, mobileOpen, onCloseMobile }) {
             }}
           >
             <HelpCircle size={16} />
-            <span>Help & Support</span>
+            <span>Help &amp; Support</span>
           </button>
 
           <NavLink

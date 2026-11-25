@@ -17,6 +17,58 @@ _strategy_instances: dict = {}
 logger = logging.getLogger("bot_engine")
 
 
+async def _verify_bot_terminal_ownership(bot_cfg: dict) -> tuple[bool, str, str]:
+    """
+    Verify that the currently active local MT5 terminal login belongs to this bot's owner.
+    Prevents cross-user bot execution or accidentally trading another user's live broker account.
+    Returns (is_authorized, account_id, reason).
+    """
+    user_id = bot_cfg.get("user_id")
+    if not user_id:
+        return False, "", "Missing user_id on bot configuration"
+    try:
+        def _get_owner_acc():
+            return (
+                supabase.table("accounts")
+                .select("id, login, status")
+                .eq("user_id", user_id)
+                .eq("status", "connected")
+                .execute()
+            )
+
+        acc_res, terminal_info = await asyncio.gather(
+            asyncio.to_thread(_get_owner_acc),
+            mt5.get_account_info(""),
+        )
+        rows = acc_res.data or []
+        if not rows:
+            return False, "", "Owner has no connected broker account"
+
+        terminal_login = str(terminal_info.get("login", "")).strip() if terminal_info else ""
+        if not terminal_login:
+            return False, "", "MT5 terminal is not logged in"
+
+        req_acc_id = bot_cfg.get("account_id") or ""
+        matched = None
+        for r in rows:
+            if str(r.get("login", "")).strip() == terminal_login:
+                if not req_acc_id or r.get("id") == req_acc_id:
+                    matched = r
+                    break
+        # Fallback if bot had stale account_id from a prior session of SAME user & login
+        if not matched:
+            for r in rows:
+                if str(r.get("login", "")).strip() == terminal_login:
+                    matched = r
+                    break
+
+        if not matched:
+            return False, "", "Active MT5 terminal login does not match bot owner's connected account"
+        return True, matched["id"], ""
+    except Exception as e:
+        return False, "", f"Ownership check error: {e}"
+
+
 def _get_strategy(strategy_name: str, bot_config: dict = None) -> Optional:
     """Get a strategy instance by name, injecting sub-bots for Full Confluence."""
     key = strategy_name
@@ -171,6 +223,13 @@ async def _bot_loop(bot_id: str):
             pair = bot["pair"]
             timeframe = bot.get("timeframe", "H1")
 
+            # Multi-tenant security guard: verify owner's connected MT5 login matches terminal
+            ok, resolved_acc_id, deny_reason = await _verify_bot_terminal_ownership(bot)
+            if not ok:
+                logger.warning(f"[SECURITY GUARD] Bot {bot_id} paused: {deny_reason}")
+                await asyncio.sleep(_get_poll_interval(strategy_name))
+                continue
+
             # Fetch candle data (300 candles ensures sufficient lookback for EMA 200, swings, and filters)
             candles = await mt5.get_candles(pair, timeframe, count=300)
             if not candles:
@@ -184,7 +243,7 @@ async def _bot_loop(bot_id: str):
             if signal:
                 # Execute trade via local MT5
                 order = await mt5.place_order(
-                    account_id="",
+                    account_id=resolved_acc_id,
                     pair=signal.pair,
                     order_type=signal.action.upper(),
                     volume=signal.lot_size,
@@ -261,6 +320,12 @@ async def _bot_loop_mmc(bot_id: str):
 
             pair = bot["pair"]
             timeframe = bot.get("timeframe", "M5")
+
+            ok, _, deny_reason = await _verify_bot_terminal_ownership(bot)
+            if not ok:
+                logger.warning(f"[SECURITY GUARD] MMC Bot {bot_id} paused: {deny_reason}")
+                await asyncio.sleep(_get_poll_interval(strategy_name))
+                continue
 
             # 1. Track closures and fire cooldown
             db_trades = supabase.table("trades").select("*").eq("bot_id", bot_id).eq("status", "open").execute()
@@ -370,6 +435,12 @@ async def _bot_loop_pyramid(bot_id: str):
             pair = bot_cfg["pair"]
             timeframe = bot_cfg.get("timeframe", "M1")
 
+            ok, _, deny_reason = await _verify_bot_terminal_ownership(bot_cfg)
+            if not ok:
+                logger.warning(f"[SECURITY GUARD] PyramidBot {bot_id} paused: {deny_reason}")
+                await asyncio.sleep(15)
+                continue
+
             # Pull config overrides from bot_settings.config dict
             cfg = bot_cfg.get("config", {}) or {}
             bot_instance.base_lot = cfg.get("base_lot", bot_cfg.get("lot_size", bot_instance.base_lot))
@@ -459,6 +530,13 @@ async def _bot_loop_scalp_fvg(bot_id: str):
 
             bot_cfg = result.data
 
+            ok, _, deny_reason = await _verify_bot_terminal_ownership(bot_cfg)
+            if not ok:
+                logger.warning(f"[SECURITY GUARD] scalp_fvg {bot_id} paused: {deny_reason}")
+                stop_breakeven_monitor(bot_id)
+                await asyncio.sleep(15)
+                continue
+
             # Load config overrides ONCE on first cycle only.
             # Previously this ran every cycle, overwriting the scheduler's
             # live-balance re-anchor (cfg says initial_balance=100 but
@@ -513,13 +591,29 @@ async def _bot_loop_scalp_fvg(bot_id: str):
 
 
 async def resume_running_bots():
-    """On startup, resume bots that were running."""
+    """On startup, ONLY resume bots whose owner actively matches the live MT5 terminal login."""
     try:
-        result = supabase.table("bot_settings").select("*").eq("status", "running").execute()
+        result = await asyncio.to_thread(
+            lambda: supabase.table("bot_settings").select("*").eq("status", "running").execute()
+        )
         for bot in result.data or []:
-            # Visibility fix: never resume silently. Show the bot id, strategy
-            # name and the live MT5 account balance so an unexpected auto-resume
-            # (e.g. after a crash while the market is closed) is visible in logs.
+            ok, _, deny_reason = await _verify_bot_terminal_ownership(bot)
+            if not ok:
+                logger.warning(
+                    f"[SECURITY GUARD] Skipping startup resume of bot {bot['id']} "
+                    f"(user={bot.get('user_id')}): {deny_reason}. Setting status=stopped."
+                )
+                try:
+                    await asyncio.to_thread(
+                        lambda bid=bot["id"]: supabase.table("bot_settings")
+                        .update({"status": "stopped", "updated_at": datetime.utcnow().isoformat()})
+                        .eq("id", bid)
+                        .execute()
+                    )
+                except Exception:
+                    pass
+                continue
+
             try:
                 acc = await mt5.get_account_info(bot.get("account_id", ""))
                 balance = acc.get("balance", 0)
@@ -710,6 +804,12 @@ async def _bot_loop_signal_strength_hedge(bot_id: str):
                 break
             bot_cfg = result.data
 
+            ok, _, deny_reason = await _verify_bot_terminal_ownership(bot_cfg)
+            if not ok:
+                logger.warning(f"[SECURITY GUARD] signal_strength_hedge {bot_id} paused: {deny_reason}")
+                await asyncio.sleep(_get_poll_interval("signal_strength_hedge"))
+                continue
+
             if not _config_loaded:
                 _config_loaded = True
                 cfg = bot_cfg.get("config", {}) or {}
@@ -843,6 +943,12 @@ async def _bot_loop_nyao_scalper(bot_id: str):
             bot_cfg = result.data
             pair = bot_cfg["pair"]
             timeframe = bot_cfg.get("timeframe", "M1")
+
+            ok, _, deny_reason = await _verify_bot_terminal_ownership(bot_cfg)
+            if not ok:
+                logger.warning(f"[SECURITY GUARD] nyao_scalper {bot_id} paused: {deny_reason}")
+                await asyncio.sleep(_get_poll_interval("nyao_scalper"))
+                continue
             account_id = bot_cfg.get("account_id", "")
             user_id = bot_cfg.get("user_id")
 
@@ -982,6 +1088,13 @@ async def _bot_loop_pipstep_reversal(bot_id: str):
             pair = bot_cfg["pair"]
             account_id = bot_cfg.get("account_id", "")
             user_id = bot_cfg.get("user_id")
+
+            ok, resolved_acc_id, deny_reason = await _verify_bot_terminal_ownership(bot_cfg)
+            if not ok:
+                logger.warning(f"[SECURITY GUARD] pipstep_reversal {bot_id} paused: {deny_reason}")
+                await asyncio.sleep(10)
+                continue
+            account_id = resolved_acc_id or account_id
 
             if not _config_loaded:
                 _config_loaded = True

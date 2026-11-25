@@ -2,19 +2,21 @@ import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Search, Sparkles, Bell, Mail, Moon,
-  Menu, X, TrendingUp, ShieldCheck, Activity
+  Menu, X, Crown
 } from 'lucide-react'
 import api from '../api'
 
-export default function Navbar({ session, onToggleMobileSidebar }) {
+export default function Navbar({ session, userPlan = 'free', onToggleMobileSidebar }) {
   const navigate = useNavigate()
   const [searchQuery, setSearchQuery] = useState('')
   const [showAiModal, setShowAiModal] = useState(false)
   const [copilotData, setCopilotData] = useState({ account: null, positions: [], loading: false })
 
-  const userName = session?.user?.user_metadata?.full_name 
+  const userName = session?.user?.user_metadata?.full_name
     || (session?.user?.email ? session.user.email.split('@')[0] : 'Trader')
-  const userRole = session?.user?.app_metadata?.role || 'Premium Member'
+  const plan = (userPlan || 'free').toLowerCase()
+  const planLabel = plan === 'elite' ? 'Elite VIP' : plan === 'pro' ? 'Pro Trader' : 'Free Starter'
+  const planColor = plan === 'elite' ? '#f59e0b' : plan === 'pro' ? '#00d4ff' : '#10b981'
   const userInitial = userName.charAt(0).toUpperCase() || 'T'
 
   useEffect(() => {
@@ -25,7 +27,7 @@ export default function Navbar({ session, onToggleMobileSidebar }) {
         api.get('/api/trades/positions').catch(() => null)
       ]).then(([acc, pos]) => {
         setCopilotData({
-          account: acc && acc.connected && acc.login ? acc : null,
+          account: acc && acc.connected && acc.terminal_synced && acc.login ? acc : null,
           positions: pos && Array.isArray(pos.positions) ? pos.positions : [],
           loading: false
         })
@@ -214,6 +216,30 @@ export default function Navbar({ session, onToggleMobileSidebar }) {
           </button>
         </div>
 
+        {/* Plan Upgrade / Status Pill (Clickable to /pricing) */}
+        <Link
+          to="/pricing"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '7px 12px',
+            borderRadius: '20px',
+            background: `${planColor}18`,
+            border: `1px solid ${planColor}44`,
+            color: planColor,
+            fontSize: '12px',
+            fontWeight: 700,
+            textDecoration: 'none',
+            whiteSpace: 'nowrap',
+            transition: 'all 0.15s ease'
+          }}
+          title="View or upgrade membership plan"
+        >
+          <Crown size={13} />
+          <span>{plan === 'free' ? 'Upgrade Pro' : planLabel}</span>
+        </Link>
+
         {/* User Profile (Clickable to /profile) */}
         <Link
           to="/profile"
@@ -258,8 +284,8 @@ export default function Navbar({ session, onToggleMobileSidebar }) {
             <span style={{ fontSize: '13px', fontWeight: 600, color: '#f8fafc', lineHeight: 1.2 }}>
               {userName}
             </span>
-            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 500 }}>
-              {userRole}
+            <span style={{ fontSize: '11px', color: planColor, fontWeight: 600 }}>
+              {planLabel}
             </span>
           </div>
         </Link>

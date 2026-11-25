@@ -29,52 +29,52 @@ export async function fetchLiveMarketData() {
     lastUpdated: new Date()
   }
 
-  // 1. Fetch live quotes from MT5 backend service
-  try {
-    const mt5Res = await api.get('/api/markets/prices')
-    if (mt5Res?.prices && Array.isArray(mt5Res.prices)) {
-      const priceMap = new Map()
-      mt5Res.prices.forEach(p => {
-        const clean = p.symbol.toUpperCase()
-        priceMap.set(clean, p)
-      })
+  // Fetch MT5 backend quotes and Binance public tickers CONCURRENTLY
+  const mt5Promise = api.get('/api/markets/prices', { timeout: 2500 }).catch(() => null)
+  const cryptoSymbols = ['"BTCUSDT"', '"ETHUSDT"', '"SOLUSDT"', '"PAXGUSDT"']
+  const binanceUrl = `${BINANCE_BASE}/ticker/24hr?symbols=[${cryptoSymbols.join(',')}]`
+  const binancePromise = fetch(binanceUrl, { signal: AbortSignal.timeout(2000) })
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null)
 
-      result.overview = result.overview.map(item => {
-        const quote = priceMap.get(item.symbol)
-        if (quote && quote.bid) {
-          return {
-            ...item,
-            price: quote.bid,
-            direction: quote.ask >= quote.bid ? 'up' : 'down'
-          }
-        }
-        return item
-      })
+  const [mt5Res, data] = await Promise.all([mt5Promise, binancePromise])
 
-      result.extended = result.extended.map(item => {
-        const quote = priceMap.get(item.symbol)
-        if (quote && quote.bid) {
-          return {
-            ...item,
-            price: quote.bid,
-            direction: quote.ask >= quote.bid ? 'up' : 'down'
-          }
+  // 1. Apply live quotes from MT5 backend service
+  if (mt5Res?.prices && Array.isArray(mt5Res.prices)) {
+    const priceMap = new Map()
+    mt5Res.prices.forEach(p => {
+      const clean = p.symbol.toUpperCase()
+      priceMap.set(clean, p)
+    })
+
+    result.overview = result.overview.map(item => {
+      const quote = priceMap.get(item.symbol)
+      if (quote && quote.bid) {
+        return {
+          ...item,
+          price: quote.bid,
+          direction: quote.ask >= quote.bid ? 'up' : 'down'
         }
-        return item
-      })
-    }
-  } catch {
-    // Backend MT5 might be initializing
+      }
+      return item
+    })
+
+    result.extended = result.extended.map(item => {
+      const quote = priceMap.get(item.symbol)
+      if (quote && quote.bid) {
+        return {
+          ...item,
+          price: quote.bid,
+          direction: quote.ask >= quote.bid ? 'up' : 'down'
+        }
+      }
+      return item
+    })
   }
 
-  // 2. Fetch live crypto and gold proxy from Binance public API
-  try {
-    const cryptoSymbols = ['"BTCUSDT"', '"ETHUSDT"', '"SOLUSDT"', '"PAXGUSDT"']
-    const url = `${BINANCE_BASE}/ticker/24hr?symbols=[${cryptoSymbols.join(',')}]`
-
-    const response = await fetch(url, { signal: AbortSignal.timeout(3500) })
-    if (response.ok) {
-      const data = await response.json()
+  // 2. Enrich 24h change % & fallback prices from Binance public API
+  if (Array.isArray(data)) {
+    try {
 
       const btc = data.find(d => d.symbol === 'BTCUSDT')
       const eth = data.find(d => d.symbol === 'ETHUSDT')
@@ -142,9 +142,9 @@ export async function fetchLiveMarketData() {
           }
         }
       }
+    } catch {
+      // Binance public rate-limit fallback
     }
-  } catch {
-    // Binance public rate-limit fallback
   }
 
   return result

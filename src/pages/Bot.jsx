@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Bot as BotIcon, TrendingUp, DollarSign, Activity, AlertCircle, Brain } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Bot as BotIcon, TrendingUp, DollarSign, Activity, AlertCircle, Brain, Crown } from 'lucide-react'
 import BotCard from '../components/BotCard'
 import StrategyConfigModal from '../components/StrategyConfigModal'
 import MMCDashboard from '../components/MMCDashboard'
@@ -20,7 +21,8 @@ export const BUILTIN_STRATEGIES = [
   { name: 'pipstep_reversal', title: 'PipStep Reversal EA', risk: 'Medium', description: 'BuyStop/SellStop straddle pair, step trailing SL & instant reversal on SL hit' }
 ]
 
-export default function Bot({ session }) {
+export default function Bot({ session, userPlan: propPlan = 'free' }) {
+  const navigate = useNavigate()
   const [activeBots, setActiveBots] = useState([])
   const [loading, setLoading] = useState(true)
   const [backendOnline, setBackendOnline] = useState(null)
@@ -32,9 +34,13 @@ export default function Bot({ session }) {
   const [accountInfo, setAccountInfo] = useState(null)
   const [apiError, setApiError] = useState(null)
   const [winRate, setWinRate] = useState(null)
-  const [userPlan, setUserPlan] = useState('free')
+  const [userPlan, setUserPlan] = useState((propPlan || 'free').toLowerCase())
   const toast = useToast()
   const pollRef = useRef(null)
+
+  useEffect(() => {
+    setUserPlan((propPlan || 'free').toLowerCase())
+  }, [propPlan])
 
   useEffect(() => {
     if (!session?.access_token) {
@@ -95,28 +101,35 @@ export default function Bot({ session }) {
     return () => clearInterval(pollRef.current)
   }, [session])
 
+  const handleUpgrade = (tier = 'pro') => {
+    navigate(`/pricing?plan=${tier}`)
+  }
+
   const handleStart = (strategy) => {
     if (backendOnline === false) {
-      toast.error('Backend API is offline. Start it with: cd backend && uvicorn main:app --port 8002 --reload')
+      toast.error('Backend API is offline. Run start.bat or cd backend && uvicorn main:app --port 8002')
       return
     }
 
     // Elite lock rule: other bot not ready for now
     if (['trading_agents', 'signal_strength_hedge', 'ai_committee'].includes(strategy)) {
-      toast.info('🔒 This strategy is exclusive to the Elite Plan (Coming Soon). It is currently locked.')
+      toast.info('This strategy is exclusive to the Elite Plan (Coming Soon). Opening plan details...')
+      navigate('/pricing?plan=elite')
       return
     }
 
-    // Pro lock rule: PipStep Reversal EA requires Pro
+    // Pro lock rule: PipStep Reversal EA requires Pro -> open buying page directly
     if (strategy === 'pipstep_reversal' && userPlan === 'free') {
-      toast.warn('⭐ PipStep Reversal EA requires the PRO Plan. Upgrade to Pro to activate this high-frequency straddle bot.')
+      toast.warn('PipStep Reversal EA requires the PRO Plan. Redirecting to upgrade page...')
+      navigate('/pricing?plan=pro')
       return
     }
 
     // Free limit rule: only 1 bot can run
     const runningCount = activeBots.filter(b => b.status === 'running').length
     if (userPlan === 'free' && runningCount >= 1) {
-      toast.warn('⚠️ Free Plan Limit: You can only run 1 active bot simultaneously. Please stop your running bot or upgrade to Pro.')
+      toast.warn('Free Plan allows 1 active bot at a time. Upgrade to Pro for multi-bot execution.')
+      navigate('/pricing?plan=pro')
       return
     }
 
@@ -238,8 +251,10 @@ export default function Bot({ session }) {
           <h1 style={styles.title}>AI Bots</h1>
           <p style={styles.subtitle}>Deploy and manage your AI trading bots</p>
           {accountInfo?.login && (
-            <p style={{ color: '#4a90a4', fontSize: 12, marginTop: 4 }}>
-              MT5: {accountInfo.login} on {accountInfo.server} (${accountInfo.balance?.toLocaleString()})
+            <p style={{ color: accountInfo.terminal_synced ? '#10b981' : '#f59e0b', fontSize: 12, marginTop: 4 }}>
+              {accountInfo.terminal_synced
+                ? `MT5 Synced: #${accountInfo.login} on ${accountInfo.server} ($${accountInfo.balance?.toLocaleString()})`
+                : `MT5 Linked: #${accountInfo.login} (Open MT5 Desktop to sync live terminal)`}
             </p>
           )}
           {backendOnline === false && (
@@ -254,27 +269,49 @@ export default function Bot({ session }) {
           )}
         </div>
 
-        <button
-          onClick={() => setShowAIAgentsModal(true)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: 'linear-gradient(135deg, #38bdf8, #6366f1)',
-            border: 'none',
-            color: '#ffffff',
-            padding: '11px 20px',
-            borderRadius: '12px',
-            fontWeight: '700',
-            fontSize: '13px',
-            cursor: 'pointer',
-            boxShadow: '0 4px 16px rgba(56, 189, 248, 0.35)',
-            transition: 'transform 0.15s ease'
-          }}
-        >
-          <Brain size={18} />
-          <span>TradingAgents Committee</span>
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => navigate('/pricing?plan=pro')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '7px',
+              background: userPlan === 'free' ? 'linear-gradient(135deg, #00d4ff, #3b5bf5)' : 'rgba(0, 212, 255, 0.12)',
+              border: userPlan === 'free' ? 'none' : '1px solid rgba(0, 212, 255, 0.35)',
+              color: userPlan === 'free' ? '#ffffff' : '#00d4ff',
+              padding: '10px 16px',
+              borderRadius: '12px',
+              fontWeight: '700',
+              fontSize: '12.5px',
+              cursor: 'pointer'
+            }}
+          >
+            <Crown size={15} />
+            <span>{userPlan === 'free' ? 'Upgrade to Pro ($29/mo)' : `${userPlan.toUpperCase()} Plan Active`}</span>
+          </button>
+
+          <button
+            onClick={() => setShowAIAgentsModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: 'linear-gradient(135deg, #38bdf8, #6366f1)',
+              border: 'none',
+              color: '#ffffff',
+              padding: '11px 20px',
+              borderRadius: '12px',
+              fontWeight: '700',
+              fontSize: '13px',
+              cursor: 'pointer',
+              boxShadow: '0 4px 16px rgba(56, 189, 248, 0.35)',
+              transition: 'transform 0.15s ease'
+            }}
+          >
+            <Brain size={18} />
+            <span>TradingAgents Committee</span>
+          </button>
+        </div>
       </div>
 
       {apiError && (
@@ -331,6 +368,7 @@ export default function Bot({ session }) {
             title={s.title}
             description={s.description}
             risk={s.risk}
+            userPlan={userPlan}
             isRunning={runningBots.some(b => b.strategy === (s.name || s) && b.status === 'running')}
             onStart={() => handleStart(s.name || s)}
             onStop={() => {
@@ -338,6 +376,7 @@ export default function Bot({ session }) {
               if (bot) handleStop(bot.id)
             }}
             onConfigure={() => handleConfigure(s.name || s)}
+            onUpgrade={handleUpgrade}
           />
         ))}
       </div>

@@ -15,6 +15,11 @@ const strategyDefaults = {
     pairs: ['EURUSD', 'GBPUSD', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'LTCUSD', 'BNBUSD', 'DOGEUSD', 'ADAUSD', 'USDJPY', 'AUDUSD'],
     timeframes: ['H1', 'H4', 'D1'], defaultPair: 'EURUSD', defaultTimeframe: 'H1'
   },
+  mmc_mirror: {
+    name: 'MMC Mirror',
+    pairs: ['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD', 'USDJPY', 'AUDUSD'],
+    timeframes: ['M5', 'M15', 'H1', 'H4'], defaultPair: 'XAUUSD', defaultTimeframe: 'M5'
+  },
   classic: {
     name: 'Classic Mode',
     pairs: ['EURUSD', 'GBPUSD', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'LTCUSD', 'BNBUSD', 'DOGEUSD', 'ADAUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'GBPJPY', 'EURJPY', 'NZDUSD'],

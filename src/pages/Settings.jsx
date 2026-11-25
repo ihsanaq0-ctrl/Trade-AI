@@ -9,25 +9,27 @@ import { supabase } from '../supabase'
 
 export default function Settings({ session }) {
   const toast = useToast()
+  const uid = session?.user?.id || 'guest'
 
   const [profile, setProfile] = useState(() => ({
-    name: localStorage.getItem('trade_profile_name') || session?.user?.user_metadata?.full_name || (session?.user?.email ? session.user.email.split('@')[0] : 'Trader'),
+    name: localStorage.getItem(`trade_profile_name_${uid}`) || session?.user?.user_metadata?.full_name || (session?.user?.email ? session.user.email.split('@')[0] : 'Trader'),
     email: session?.user?.email || ''
   }))
 
   useEffect(() => {
     if (session?.user) {
-      setProfile(prev => ({
-        ...prev,
+      const metaName = session.user.user_metadata?.full_name
+      const emailPrefix = session.user.email ? session.user.email.split('@')[0] : 'Trader'
+      setProfile({
         email: session.user.email || '',
-        name: localStorage.getItem('trade_profile_name') || prev.name || session.user.user_metadata?.full_name || (session.user.email ? session.user.email.split('@')[0] : 'Trader')
-      }))
+        name: localStorage.getItem(`trade_profile_name_${session.user.id}`) || metaName || emailPrefix
+      })
     }
   }, [session])
 
   const [defaults, setDefaults] = useState(() => {
     try {
-      const saved = localStorage.getItem('trade_bot_risk_defaults')
+      const saved = localStorage.getItem(`trade_bot_risk_defaults_${uid}`)
       return saved ? JSON.parse(saved) : {
         riskPercent: 2,
         lotSize: 0.01,
@@ -49,21 +51,27 @@ export default function Settings({ session }) {
 
   const handleSaveProfile = async () => {
     try {
-      localStorage.setItem('trade_profile_name', profile.name)
+      localStorage.setItem(`trade_profile_name_${uid}`, profile.name)
       if (session?.user) {
         await supabase.auth.updateUser({
           data: { full_name: profile.name }
         })
+        await supabase.from('profiles').upsert([{
+          id: session.user.id,
+          name: profile.name,
+          email: session.user.email
+        }], { onConflict: 'id' })
+        await supabase.auth.refreshSession().catch(() => {})
       }
       toast.success('Profile preferences updated')
     } catch {
-      localStorage.setItem('trade_profile_name', profile.name)
+      localStorage.setItem(`trade_profile_name_${uid}`, profile.name)
       toast.success('Profile preferences saved')
     }
   }
 
   const handleSaveDefaults = () => {
-    localStorage.setItem('trade_bot_risk_defaults', JSON.stringify(defaults))
+    localStorage.setItem(`trade_bot_risk_defaults_${uid}`, JSON.stringify(defaults))
     toast.success('Default bot risk parameters saved')
   }
 

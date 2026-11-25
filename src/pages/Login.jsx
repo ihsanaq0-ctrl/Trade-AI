@@ -106,6 +106,25 @@ export default function Login() {
     navigate('/dashboard')
   }
 
+  const handleForgotPassword = async () => {
+    setError('')
+    setSuccess('')
+    if (!email || !email.trim()) {
+      setError('Enter your email address first, then click Forgot password.')
+      return
+    }
+    setLoading(true)
+    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: `${window.location.origin}/login`
+    })
+    setLoading(false)
+    if (resetErr) {
+      setError(formatAuthError(resetErr))
+    } else {
+      setSuccess(`Password reset link sent to ${email.trim()}. Check your inbox!`)
+    }
+  }
+
   const handleGoogleLogin = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -265,9 +284,20 @@ export default function Login() {
         {/* Forgot Password */}
         {isLogin && (
           <div style={{ textAlign: 'right', marginBottom: '24px' }}>
-            <span style={{ color: '#00d4ff', fontSize: '12px', cursor: 'pointer' }}>
+            <button
+              type="button"
+              onClick={handleForgotPassword}
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                color: '#00d4ff',
+                fontSize: '12px',
+                cursor: 'pointer'
+              }}
+            >
               Forgot password?
-            </span>
+            </button>
           </div>
         )}
 
