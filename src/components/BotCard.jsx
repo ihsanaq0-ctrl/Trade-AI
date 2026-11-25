@@ -69,6 +69,7 @@ export default function BotCard({
   color,
   userPlan = 'free',
   isRunning,
+  runtime,
   onStart,
   onStop,
   onConfigure,
@@ -215,13 +216,27 @@ export default function BotCard({
         <span style={styles.statusDot}></span>
         <span style={styles.statusText}>
           {isRunning
-            ? 'Running'
+            ? (runtime?.state ? `Running · ${runtime.state}` : 'Running')
             : isProLocked
             ? 'Locked (Requires Pro Plan)'
             : isEliteLocked
             ? 'Locked (Elite — Coming Soon)'
             : 'Stopped'}
         </span>
+        {isRunning && runtime?.last_message && (
+          <div style={{
+            marginTop: 6,
+            fontSize: 11,
+            lineHeight: 1.4,
+            color: runtime.error_code ? '#f59e0b' : '#94a3b8',
+            background: runtime.error_code ? 'rgba(245, 158, 11, 0.1)' : 'rgba(148, 163, 184, 0.08)',
+            border: `1px solid ${runtime.error_code ? 'rgba(245, 158, 11, 0.25)' : 'rgba(148, 163, 184, 0.16)'}`,
+            borderRadius: 6,
+            padding: '5px 8px',
+          }}>
+            {runtime.last_message}
+          </div>
+        )}
       </div>
 
       <div style={styles.actions}>

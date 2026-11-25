@@ -145,6 +145,7 @@ async def get_account_info(account_id: str) -> dict:
     info = mt5.account_info()
     if not info:
         return {"balance": 0, "equity": 0, "currency": "USD"}
+    ti = mt5.terminal_info()
     return {
         "balance": info.balance,
         "equity": info.equity,
@@ -155,6 +156,10 @@ async def get_account_info(account_id: str) -> dict:
         "profit": info.profit,
         "margin": info.margin,
         "margin_free": info.margin_free,
+        "trade_allowed": bool(ti.trade_allowed) if ti else False,
+        "tradeapi_disabled": bool(ti.tradeapi_disabled) if ti else False,
+        "account_trade_allowed": bool(info.trade_allowed),
+        "trade_expert": bool(info.trade_expert),
     }
 
 
@@ -169,6 +174,7 @@ async def get_positions(account_id: str) -> list:
         for p in positions:
             result.append({
                 "ticket": p.ticket,
+                "identifier": getattr(p, "identifier", p.ticket),
                 "symbol": p.symbol,
                 "type": "BUY" if p.type == 0 else "SELL",
                 "volume": p.volume,
@@ -252,7 +258,9 @@ def _retcode_message(retcode: int) -> str:
 
 async def place_order(account_id: str, pair: str, order_type: str, volume: float,
                       stop_loss: float = None, take_profit: float = None,
-                      comment: str = "TradeAI Bot") -> dict:
+                      comment: str = "TradeAI Bot",
+                      magic: Optional[int] = None,
+                      deviation: int = 10) -> dict:
     """Place a market order via local MT5 terminal."""
     mt5 = _ensure_mt5()
 
@@ -262,20 +270,23 @@ async def place_order(account_id: str, pair: str, order_type: str, volume: float
         if not t_info.trade_allowed:
             return {
                 "success": False,
+                "retcode": 10027,
                 "error": "Algo Trading is disabled in your MetaTrader 5 terminal. In MT5, click 'Algo Trading' in the top toolbar (or press Ctrl+E) to allow order execution."
             }
         if t_info.tradeapi_disabled:
             return {
                 "success": False,
+                "retcode": 10027,
                 "error": "External Python API trading is disabled in MetaTrader 5. Go to Tools > Options > Expert Advisors and ensure external API trading is enabled."
             }
 
     # Pre-flight check account trading permissions
     a_info = mt5.account_info()
-    if a_info and not a_info.trade_allowed:
+    if a_info and (not a_info.trade_allowed or (magic is not None and not a_info.trade_expert)):
         return {
             "success": False,
-            "error": "Trading is disabled for this account by your broker (or an investor read-only password is in use)."
+            "retcode": 10017,
+            "error": "Trading/EA trading is disabled for this account by your broker (or an investor read-only password is in use)."
         }
 
     symbol = _ensure_symbol_visible(pair)
@@ -286,7 +297,7 @@ async def place_order(account_id: str, pair: str, order_type: str, volume: float
         return {"success": False, "error": f"Symbol {pair} (resolved: {symbol}) not found"}
 
     if not symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_FULL:
-        return {"success": False, "error": f"Trading not allowed for {pair}"}
+        return {"success": False, "retcode": 10018, "error": f"Trading not allowed for {pair}"}
 
     # symbol_info_tick can return None (weekend, market closed, symbol not in
     # Market Watch) — accessing .ask/.bid on None crashes the whole bot loop.
@@ -305,7 +316,7 @@ async def place_order(account_id: str, pair: str, order_type: str, volume: float
         else:
             filling = mt5.ORDER_FILLING_RETURN
 
-    magic_num = 234001 if "manual" in comment.lower() else 234000
+    magic_num = int(magic) if magic is not None else (234001 if "manual" in comment.lower() else 234000)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -315,7 +326,7 @@ async def place_order(account_id: str, pair: str, order_type: str, volume: float
         "price": price,
         "sl": float(stop_loss) if stop_loss else 0.0,
         "tp": float(take_profit) if take_profit else 0.0,
-        "deviation": 10,
+        "deviation": max(1, int(deviation)),
         "magic": magic_num,
         "comment": comment[:31],
         "type_time": mt5.ORDER_TIME_GTC,
@@ -323,8 +334,8 @@ async def place_order(account_id: str, pair: str, order_type: str, volume: float
     }
 
     result = mt5.order_send(request)
-    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-        return {"ticket": result.order, "success": True, "price": price}
+    if result and result.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL):
+        return {"ticket": result.order, "success": True, "price": price, "retcode": int(result.retcode)}
 
     # If rejected due to filling mode (10030), retry with alternative filling modes
     if result and result.retcode == 10030:
@@ -332,11 +343,15 @@ async def place_order(account_id: str, pair: str, order_type: str, volume: float
             if alt_fill != filling:
                 request["type_filling"] = alt_fill
                 retry_res = mt5.order_send(request)
-                if retry_res and retry_res.retcode == mt5.TRADE_RETCODE_DONE:
-                    return {"ticket": retry_res.order, "success": True, "price": price}
+                if retry_res and retry_res.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL):
+                    return {"ticket": retry_res.order, "success": True, "price": price, "retcode": int(retry_res.retcode)}
 
     error = mt5.last_error() if result is None else _retcode_message(result.retcode)
-    return {"success": False, "error": str(error)}
+    return {
+        "success": False,
+        "retcode": int(result.retcode) if result else None,
+        "error": str(error),
+    }
 
 
 async def close_position(account_id: str, position_id: str) -> dict:
@@ -477,7 +492,7 @@ async def modify_sl_tp(account_id: str, position_id: str,
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
         return {"success": True, "ticket": pos.ticket, "new_sl": stop_loss, "new_tp": take_profit}
     error = mt5.last_error() if result is None else _retcode_message(result.retcode)
-    return {"success": False, "error": str(error)}
+    return {"success": False, "retcode": int(result.retcode) if result else None, "error": str(error)}
 
 
 async def disconnect(account_id: str):
@@ -503,27 +518,80 @@ async def get_history_deal_profit(ticket: int) -> float:
 
 async def get_history_deal_reason(position_ticket: int) -> int:
     """Get the DEAL_REASON of the deal that closed a position (e.g. DEAL_REASON_SL = 4)."""
+    details = await get_history_deal_close_details(position_ticket)
+    return int(details["reason"]) if details else -1
+
+
+async def get_history_deal_close_details(position_ticket: int) -> Optional[dict]:
+    """Return closing deal metadata (reason, close_price, net profit) or None if not yet recorded."""
     mt5 = _ensure_mt5()
     deals = mt5.history_deals_get(position=int(position_ticket))
     if not deals:
-        return -1
+        return None
+    out_entries = (
+        mt5.DEAL_ENTRY_OUT,
+        getattr(mt5, "DEAL_ENTRY_OUT_BY", 3),
+        getattr(mt5, "DEAL_ENTRY_INOUT", 2),
+    )
+    closing_deal = None
     for d in reversed(deals):
-        # Entry OUT or OUT_BY is the closing deal
-        if getattr(d, 'entry', None) in (mt5.DEAL_ENTRY_OUT, getattr(mt5, 'DEAL_ENTRY_OUT_BY', 1)):
-            return int(getattr(d, 'reason', -1))
-    return -1
+        if getattr(d, "entry", None) in out_entries:
+            closing_deal = d
+            break
+    if closing_deal is None:
+        return None
+    net_profit = sum(
+        float(getattr(d, "profit", 0.0) or 0.0)
+        + float(getattr(d, "swap", 0.0) or 0.0)
+        + float(getattr(d, "commission", 0.0) or 0.0)
+        + float(getattr(d, "fee", 0.0) or 0.0)
+        for d in deals
+    )
+    return {
+        "reason": int(getattr(closing_deal, "reason", -1)),
+        "close_price": float(getattr(closing_deal, "price", 0.0) or 0.0),
+        "profit": round(net_profit, 2),
+        "deal_ticket": int(getattr(closing_deal, "ticket", 0) or 0),
+    }
 
 
 async def place_pending_order(account_id: str, pair: str, order_type: str, volume: float,
                               price: float, stop_loss: float = 0.0, take_profit: float = 0.0,
-                              magic: int = 26110401, comment: str = "PIPSTEP") -> dict:
+                              magic: int = 26110401, comment: str = "PIPSTEP",
+                              deviation: int = 10) -> dict:
     """Place a pending stop/limit order (e.g. BUY_STOP, SELL_STOP) via local MT5 terminal."""
     mt5 = _ensure_mt5()
+
+    t_info = mt5.terminal_info()
+    if t_info:
+        if not t_info.trade_allowed:
+            return {
+                "success": False,
+                "retcode": 10027,
+                "error": "Algo Trading is disabled in your MetaTrader 5 terminal. Press Ctrl+E or click 'Algo Trading' in MT5.",
+            }
+        if t_info.tradeapi_disabled:
+            return {
+                "success": False,
+                "retcode": 10027,
+                "error": "External Python API trading is disabled in MetaTrader 5.",
+            }
+
+    a_info = mt5.account_info()
+    if a_info and (not a_info.trade_allowed or not a_info.trade_expert):
+        return {
+            "success": False,
+            "retcode": 10017,
+            "error": "Broker has disabled trading/EA trading on this account.",
+        }
 
     symbol = _ensure_symbol_visible(pair)
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
         return {"success": False, "error": f"Symbol {pair} not found"}
+
+    if symbol_info.trade_mode != mt5.SYMBOL_TRADE_MODE_FULL:
+        return {"success": False, "retcode": 10018, "error": f"Symbol trading not enabled for {symbol}"}
 
     ot_str = order_type.upper().replace(" ", "_")
     if ot_str in ("BUY_STOP", "BUYSTOP"):
@@ -552,7 +620,7 @@ async def place_pending_order(account_id: str, pair: str, order_type: str, volum
         "price": float(price),
         "sl": float(stop_loss) if stop_loss else 0.0,
         "tp": float(take_profit) if take_profit else 0.0,
-        "deviation": 10,
+        "deviation": max(1, int(deviation)),
         "magic": int(magic),
         "comment": comment[:31],
         "type_time": mt5.ORDER_TIME_GTC,
@@ -560,8 +628,8 @@ async def place_pending_order(account_id: str, pair: str, order_type: str, volum
     }
 
     result = mt5.order_send(request)
-    if result and result.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
-        return {"ticket": result.order, "success": True, "price": price}
+    if result and result.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED, getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)):
+        return {"ticket": result.order, "success": True, "price": price, "retcode": int(result.retcode)}
 
     # Retry if filling mode rejected
     if result and result.retcode == 10030:
@@ -569,11 +637,15 @@ async def place_pending_order(account_id: str, pair: str, order_type: str, volum
             if alt_fill != filling:
                 request["type_filling"] = alt_fill
                 retry_res = mt5.order_send(request)
-                if retry_res and retry_res.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
-                    return {"ticket": retry_res.order, "success": True, "price": price}
+                if retry_res and retry_res.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED, getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)):
+                    return {"ticket": retry_res.order, "success": True, "price": price, "retcode": int(retry_res.retcode)}
 
     error = mt5.last_error() if result is None else _retcode_message(result.retcode)
-    return {"success": False, "error": str(error)}
+    return {
+        "success": False,
+        "retcode": int(result.retcode) if result else None,
+        "error": str(error),
+    }
 
 
 async def delete_pending_order(ticket: int) -> dict:

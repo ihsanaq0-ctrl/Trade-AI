@@ -1,9 +1,6 @@
 import React, { useState } from 'react'
 import { X } from 'lucide-react'
 
-// Per-strategy UI defaults only: display name, tradable pairs, timeframes.
-// No hardcoded strategy parameters — the start flow asks for essentials only
-// (pair, timeframe, lot size, max trades, max daily loss).
 const strategyDefaults = {
   smart_money: {
     name: 'SMC',
@@ -57,7 +54,6 @@ const strategyDefaults = {
   }
 }
 
-// Admin-added strategies have no preset block — use sensible generic options.
 const FALLBACK = {
   name: 'Custom Strategy',
   pairs: ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'LTCUSD', 'BNBUSD', 'DOGEUSD', 'ADAUSD', 'AUDUSD', 'USDCAD', 'GBPJPY'],
@@ -68,11 +64,26 @@ const FALLBACK = {
 export default function StrategyConfigModal({ strategy, onClose, onSave, initialConfig }) {
   const config = strategyDefaults[strategy] || FALLBACK
   const init = initialConfig || {}
+  const initCfg = init.config || {}
+  const isPipStep = strategy === 'pipstep_reversal'
+
   const [pair, setPair] = useState(init.pair || config.defaultPair)
   const [timeframe, setTimeframe] = useState(init.timeframe || config.defaultTimeframe)
-  const [lotSize, setLotSize] = useState(init.lot_size ?? init.lotSize ?? 0.01)
+  const [lotSize, setLotSize] = useState(init.lot_size ?? init.lotSize ?? initCfg.lots ?? 0.01)
   const [maxTrades, setMaxTrades] = useState(init.max_trades ?? init.maxTrades ?? 1)
   const [maxDailyLoss, setMaxDailyLoss] = useState(init.max_daily_loss ?? init.maxDailyLoss ?? 100)
+
+  // PipStep_Reversal_EA.mq5 inputs
+  const [entryPips, setEntryPips] = useState(initCfg.entry_pips ?? 10)
+  const [slPips, setSlPips] = useState(initCfg.sl_pips ?? 10)
+  const [stepPips, setStepPips] = useState(initCfg.step_pips ?? 10)
+  const [pipPrice, setPipPrice] = useState(initCfg.pip_price ?? 0)
+  const [maxSpreadPips, setMaxSpreadPips] = useState(initCfg.max_spread_pips ?? 0)
+  const [deviationPips, setDeviationPips] = useState(initCfg.deviation_pips ?? 3)
+  const [dailyLossPct, setDailyLossPct] = useState(initCfg.daily_loss_pct ?? 10)
+  const [dailyProfitPct, setDailyProfitPct] = useState(initCfg.daily_profit_pct ?? 20)
+  const [magicNumber, setMagicNumber] = useState(initCfg.magic_number ?? 26110401)
+  const [deleteOnRemove, setDeleteOnRemove] = useState(initCfg.delete_on_remove ?? true)
 
   const backdrop = {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -83,7 +94,7 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
   const modal = {
     background: '#13131a', borderRadius: 16,
     border: '1px solid #1e2d3d', padding: 'clamp(18px, 4vw, 28px)',
-    width: 'min(480px, 95vw)', maxHeight: '90vh', overflow: 'auto',
+    width: isPipStep ? 'min(540px, 95vw)' : 'min(480px, 95vw)', maxHeight: '90vh', overflow: 'auto',
     boxSizing: 'border-box'
   }
   const label = { color: '#8b949e', fontSize: 12, fontWeight: 500, marginBottom: 6, display: 'block' }
@@ -92,14 +103,39 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
     border: '1px solid #1e2d3d', borderRadius: 8, color: '#e1e4e8',
     fontSize: 14, outline: 'none', boxSizing: 'border-box'
   }
-  const row = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 16 }
+  const row = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 14 }
 
   const handleSave = () => {
+    const parsedLots = Math.max(0.01, parseFloat(lotSize) || 0.01)
+    if (isPipStep) {
+      onSave({
+        pair,
+        timeframe,
+        lot_size: parsedLots,
+        max_trades: 1,
+        max_daily_loss: 100,
+        config: {
+          lots: parsedLots,
+          entry_pips: Math.max(0.1, parseFloat(entryPips) || 10),
+          sl_pips: Math.max(0.1, parseFloat(slPips) || 10),
+          step_pips: Math.max(0.1, parseFloat(stepPips) || 10),
+          pip_price: Math.max(0, parseFloat(pipPrice) || 0),
+          max_spread_pips: Math.max(0, parseFloat(maxSpreadPips) || 0),
+          deviation_pips: Math.max(0.1, parseFloat(deviationPips) || 3),
+          daily_loss_pct: Math.max(0.1, parseFloat(dailyLossPct) || 10),
+          daily_profit_pct: Math.max(0.1, parseFloat(dailyProfitPct) || 20),
+          magic_number: parseInt(magicNumber, 10) || 26110401,
+          delete_on_remove: Boolean(deleteOnRemove),
+          comment: 'PIPSTEP',
+        },
+      })
+      return
+    }
     onSave({
       pair,
       timeframe,
-      lot_size: parseFloat(lotSize) || 0.01,
-      max_trades: parseInt(maxTrades) || 1,
+      lot_size: parsedLots,
+      max_trades: parseInt(maxTrades, 10) || 1,
       max_daily_loss: parseFloat(maxDailyLoss) || 100,
     })
   }
@@ -107,7 +143,7 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
   return (
     <div style={backdrop} onClick={onClose}>
       <div style={modal} onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <h2 style={{ color: '#e1e4e8', fontSize: 18, fontWeight: 600, margin: 0 }}>{config.name}</h2>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#6b7a8d', cursor: 'pointer', padding: 4 }}>
             <X size={20} />
@@ -127,29 +163,94 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
               {config.timeframes.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
+          {isPipStep && (
+            <div>
+              <label style={label}>Lot Size</label>
+              <input style={input} type="number" step="0.01" min="0.01" max="100" value={lotSize} onChange={e => setLotSize(e.target.value)} />
+            </div>
+          )}
         </div>
 
-        <div style={row}>
-          <div>
-            <label style={label}>Lot Size</label>
-            <input style={input} type="number" step="0.01" min="0.01" max="100" value={lotSize} onChange={e => setLotSize(e.target.value)} />
-          </div>
-          <div>
-            <label style={label}>Max Trades</label>
-            <input style={input} type="number" min="1" max="100" value={maxTrades} onChange={e => setMaxTrades(e.target.value)} />
-          </div>
-        </div>
+        {isPipStep ? (
+          <>
+            <div style={row}>
+              <div>
+                <label style={label}>Entry Distance (pips)</label>
+                <input style={input} type="number" step="0.5" min="1" value={entryPips} onChange={e => setEntryPips(e.target.value)} />
+              </div>
+              <div>
+                <label style={label}>Initial SL (pips)</label>
+                <input style={input} type="number" step="0.5" min="1" value={slPips} onChange={e => setSlPips(e.target.value)} />
+              </div>
+              <div>
+                <label style={label}>Trail Step (pips)</label>
+                <input style={input} type="number" step="0.5" min="1" value={stepPips} onChange={e => setStepPips(e.target.value)} />
+              </div>
+            </div>
 
-        <div style={row}>
-          <div>
-            <label style={label}>Max Daily Loss ($)</label>
-            <input style={input} type="number" step="10" min="10" value={maxDailyLoss} onChange={e => setMaxDailyLoss(e.target.value)} />
-          </div>
-        </div>
+            <div style={row}>
+              <div>
+                <label style={label}>Daily Loss Stop (%)</label>
+                <input style={input} type="number" step="1" min="1" max="100" value={dailyLossPct} onChange={e => setDailyLossPct(e.target.value)} />
+              </div>
+              <div>
+                <label style={label}>Daily Profit Target (%)</label>
+                <input style={input} type="number" step="1" min="1" max="500" value={dailyProfitPct} onChange={e => setDailyProfitPct(e.target.value)} />
+              </div>
+              <div>
+                <label style={label}>Max Spread (pips, 0=off)</label>
+                <input style={input} type="number" step="0.5" min="0" value={maxSpreadPips} onChange={e => setMaxSpreadPips(e.target.value)} />
+              </div>
+            </div>
+
+            <div style={row}>
+              <div>
+                <label style={label}>Slippage / Deviation (pips)</label>
+                <input style={input} type="number" step="0.5" min="0.5" value={deviationPips} onChange={e => setDeviationPips(e.target.value)} />
+              </div>
+              <div>
+                <label style={label}>Pip Price Size (0=auto)</label>
+                <input style={input} type="number" step="0.0001" min="0" value={pipPrice} onChange={e => setPipPrice(e.target.value)} />
+              </div>
+              <div>
+                <label style={label}>Magic Number</label>
+                <input style={input} type="number" step="1" min="1" value={magicNumber} onChange={e => setMagicNumber(e.target.value)} />
+              </div>
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#cbd5e1', fontSize: 12.5, marginBottom: 14, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={deleteOnRemove}
+                onChange={e => setDeleteOnRemove(e.target.checked)}
+              />
+              Delete pending BuyStop/SellStop orders when bot stops
+            </label>
+          </>
+        ) : (
+          <>
+            <div style={row}>
+              <div>
+                <label style={label}>Lot Size</label>
+                <input style={input} type="number" step="0.01" min="0.01" max="100" value={lotSize} onChange={e => setLotSize(e.target.value)} />
+              </div>
+              <div>
+                <label style={label}>Max Trades</label>
+                <input style={input} type="number" min="1" max="100" value={maxTrades} onChange={e => setMaxTrades(e.target.value)} />
+              </div>
+            </div>
+
+            <div style={row}>
+              <div>
+                <label style={label}>Max Daily Loss ($)</label>
+                <input style={input} type="number" step="10" min="10" value={maxDailyLoss} onChange={e => setMaxDailyLoss(e.target.value)} />
+              </div>
+            </div>
+          </>
+        )}
 
         <p style={{ color: '#6b7a8d', fontSize: 12, lineHeight: 1.6, margin: '0 0 20px 0' }}>
-          Take profit and stop loss use server defaults (50 / 25). Strategy-specific
-          parameters can be tuned via the API config dict if needed.
+          {!isPipStep && 'Take profit and stop loss use server defaults (50 / 25). Strategy-specific parameters can be tuned via the API config dict if needed.'}
           {strategy === 'nyao_scalper' && (
             <span style={{ display: 'block', marginTop: 8, color: '#e1e4e8', background: '#1e2d3d', padding: '8px', borderRadius: '4px' }}>
               <strong>Note:</strong> The Nyao Trade Manager only manages <em>manually opened trades</em>. It will not autonomously enter new positions.
@@ -160,9 +261,9 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
               <strong>Demo/Paper Mode Default:</strong> Orders will route to your demo account until manually promoted.
             </span>
           )}
-          {strategy === 'pipstep_reversal' && (
-            <span style={{ display: 'block', marginTop: 8, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.1)', padding: '8px 12px', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
-              <strong>PipStep Straddle:</strong> Places symmetrical BuyStop & SellStop pending orders (10 pips). Automatically trails SL in steps and reverses trade instantly if SL is hit.
+          {isPipStep && (
+            <span style={{ display: 'block', marginTop: 4, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.1)', padding: '8px 12px', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
+              <strong>PipStep Reversal EA (No TP):</strong> Places symmetrical BuyStop &amp; SellStop pending orders at {entryPips} pips. Cancels the opposite stop on trigger, trails SL in {stepPips}-pip steps, and reverses immediately when SL hits.
             </span>
           )}
         </p>
@@ -174,7 +275,7 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
           </button>
           <button onClick={handleSave}
             style={{ padding: '10px 24px', background: '#00d4ff', border: 'none', borderRadius: 8, color: '#0a0e17', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
-            Save & Start Bot
+            Save &amp; Start Bot
           </button>
         </div>
       </div>

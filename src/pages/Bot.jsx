@@ -76,11 +76,17 @@ export default function Bot({ session, userPlan: propPlan = 'free' }) {
       .then(d => { if (d && d.win_rate !== undefined) setWinRate(Number(d.win_rate)) })
       .catch(() => {})
 
-    // Fetch bots
+    // Fetch bots & live terminal status
     const fetchData = async () => {
       try {
-        const data = await api.get('/api/bots', { headers })
+        const [data, accData] = await Promise.all([
+          api.get('/api/bots', { headers }),
+          api.get('/api/markets/active-account', { headers }).catch(() => null),
+        ])
         setActiveBots(Array.isArray(data) ? data : [])
+        if (accData !== null) {
+          setAccountInfo(accData?.connected && accData?.login ? accData : null)
+        }
         setApiError(null)
       } catch (e) {
         setApiError(e.message)
@@ -91,13 +97,8 @@ export default function Bot({ session, userPlan: propPlan = 'free' }) {
     }
     fetchData()
 
-    // Fetch account info
-    api.get('/api/markets/active-account', { headers })
-      .then(d => setAccountInfo(d?.connected && d?.login ? d : null))
-      .catch(() => setAccountInfo(null))
-
-    // Poll every 15s for active bots status
-    pollRef.current = setInterval(fetchData, 15000)
+    // Poll every 5s for active bots status & live MT5 Algo Trading state
+    pollRef.current = setInterval(fetchData, 5000)
     return () => clearInterval(pollRef.current)
   }, [session])
 
@@ -199,11 +200,15 @@ export default function Bot({ session, userPlan: propPlan = 'free' }) {
         }, { headers })
       }
 
-      await api.post(`/api/bots/${bot.id}/start`, {}, {
+      const startRes = await api.post(`/api/bots/${bot.id}/start`, {}, {
         headers: { 'Authorization': `Bearer ${session.access_token}` }
       })
 
-      toast.success(`${config.pair} bot started! Watching for trades...`)
+      if (startRes?.warning) {
+        toast.warn(startRes.warning)
+      } else {
+        toast.success(`${config.pair} bot started! Watching for trades...`)
+      }
 
       const bots = await api.get('/api/bots', {
         headers: { 'Authorization': `Bearer ${session.access_token}` }
@@ -314,6 +319,29 @@ export default function Bot({ session, userPlan: propPlan = 'free' }) {
         </div>
       </div>
 
+      {accountInfo?.terminal_synced && (accountInfo?.trade_allowed === false || accountInfo?.tradeapi_disabled) && (
+        <div style={{
+          background: 'rgba(245, 158, 11, 0.12)',
+          border: '1px solid rgba(245, 158, 11, 0.4)',
+          borderRadius: 12,
+          padding: '14px 18px',
+          marginBottom: 20,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12
+        }}>
+          <AlertCircle size={20} color="#f59e0b" style={{ flexShrink: 0 }} />
+          <div>
+            <div style={{ color: '#fbbf24', fontSize: 13.5, fontWeight: 700 }}>
+              MetaTrader 5 Algo Trading is Disabled (Retcode 10027)
+            </div>
+            <div style={{ color: '#cbd5e1', fontSize: 12.5, marginTop: 2 }}>
+              Your MT5 terminal is connected, but order execution is blocked until you click the <strong>Algo Trading</strong> button in the MetaTrader 5 toolbar (or press <strong>Ctrl+E</strong> in MT5 Desktop).
+            </div>
+          </div>
+        </div>
+      )}
+
       {apiError && (
         <div style={styles.errorBanner}>
           <AlertCircle size={18} color="#ff4757" />
@@ -361,24 +389,28 @@ export default function Bot({ session, userPlan: propPlan = 'free' }) {
 
       <h2 style={styles.sectionHeader}>Choose a Strategy</h2>
       <div style={styles.cardsRow}>
-        {strategies.map(s => (
-          <BotCard
-            key={s.name || s}
-            strategy={s.name || s}
-            title={s.title}
-            description={s.description}
-            risk={s.risk}
-            userPlan={userPlan}
-            isRunning={runningBots.some(b => b.strategy === (s.name || s) && b.status === 'running')}
-            onStart={() => handleStart(s.name || s)}
-            onStop={() => {
-              const bot = runningBots.find(b => b.strategy === (s.name || s))
-              if (bot) handleStop(bot.id)
-            }}
-            onConfigure={() => handleConfigure(s.name || s)}
-            onUpgrade={handleUpgrade}
-          />
-        ))}
+        {strategies.map(s => {
+          const stratName = s.name || s
+          const runningBot = runningBots.find(b => b.strategy === stratName && b.status === 'running')
+          return (
+            <BotCard
+              key={stratName}
+              strategy={stratName}
+              title={s.title}
+              description={s.description}
+              risk={s.risk}
+              userPlan={userPlan}
+              isRunning={Boolean(runningBot)}
+              runtime={runningBot?.runtime}
+              onStart={() => handleStart(stratName)}
+              onStop={() => {
+                if (runningBot) handleStop(runningBot.id)
+              }}
+              onConfigure={() => handleConfigure(stratName)}
+              onUpgrade={handleUpgrade}
+            />
+          )
+        })}
       </div>
 
       <MMCDashboard session={session} />
@@ -404,8 +436,15 @@ export default function Bot({ session, userPlan: propPlan = 'free' }) {
                 </div>
                 <div style={{ color: '#6b7a8d', fontSize: 12, marginTop: 2 }}>
                   Status: <span style={{ color: bot.status === 'running' ? '#00ff88' : bot.status === 'error' ? '#ff4757' : '#6b7a8d' }}>{bot.status}</span>
+                  {bot.runtime?.state ? ` (${bot.runtime.state})` : ''}
                   {bot.lot_size && ` · ${bot.lot_size} lots`}
+                  {bot.runtime?.reversals > 0 ? ` · ${bot.runtime.reversals} reversals` : ''}
                 </div>
+                {bot.runtime?.last_message && (
+                  <div style={{ color: bot.runtime.error_code ? '#fbbf24' : '#94a3b8', fontSize: 11.5, marginTop: 4 }}>
+                    {bot.runtime.last_message}
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <span style={{

@@ -31,6 +31,9 @@ def _normalize_bot(bot_row: dict) -> dict:
         return bot_row
     out = dict(bot_row)
     out["strategy"] = _resolve_strategy_name(bot_row)
+    rt = bot_engine.get_bot_runtime_status(out.get("id", ""))
+    if rt is not None:
+        out["runtime"] = rt
     return out
 
 
@@ -238,7 +241,17 @@ async def start_bot(bot_id: str, user=Depends(get_current_user)):
             )
             raise HTTPException(status_code=400, detail=f"Failed to start bot engine: {str(start_err)}")
 
-        return {"success": True, "message": "Bot started"}
+        warning_msg = None
+        if terminal_info and (not terminal_info.get("trade_allowed", True) or terminal_info.get("tradeapi_disabled", False)):
+            warning_msg = (
+                "Algo Trading is currently OFF in MetaTrader 5 Desktop. "
+                "Click 'Algo Trading' in the MT5 toolbar (or press Ctrl+E) so this bot can place orders."
+            )
+
+        res_payload = {"success": True, "message": "Bot started"}
+        if warning_msg:
+            res_payload["warning"] = warning_msg
+        return res_payload
     except HTTPException:
         raise
     except Exception as e:
