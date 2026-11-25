@@ -214,11 +214,15 @@ async def start_bot(bot_id: str):
 
 
 async def stop_bot(bot_id: str):
-    """Stop a running bot."""
+    """Stop a running bot and wait briefly for its finally cleanup (e.g. pending order deletion)."""
     task = _running_bots.pop(bot_id, None)
     _bot_runtime_status.pop(bot_id, None)
     if task:
         task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            pass
         logger.info(f"Bot {bot_id} stopped")
 
 
@@ -1470,16 +1474,36 @@ async def _bot_loop_pipstep_reversal(bot_id: str):
                 sell_stops = [p for p in pendings if p.get("type") == "SELL_STOP"]
                 other_stops = [p for p in pendings if p.get("type") not in ("BUY_STOP", "SELL_STOP")]
 
-                if len(buy_stops) == 1 and len(sell_stops) == 1 and not other_stops:
-                    pair_msg = (
-                        f"Armed & waiting for trigger: BuyStop @ {buy_stops[0]['price_open']}, "
-                        f"SellStop @ {sell_stops[0]['price_open']}"
-                    )
-                    _set_bot_runtime(bot_id, bot.state, pair_msg, None, bot.reversals_count)
-                    await asyncio.sleep(2)
-                    continue
+                expected_sld = bot.sl_pips * pip_unit
+                min_sld = min_d + spread
+                if expected_sld < min_sld:
+                    expected_sld = min_sld + point
 
-                if buy_stops or sell_stops:
+                if len(buy_stops) == 1 and len(sell_stops) == 1 and not other_stops:
+                    bs, ss = buy_stops[0], sell_stops[0]
+                    bs_sl_dist = abs(float(bs["price_open"]) - float(bs.get("sl") or 0.0))
+                    ss_sl_dist = abs(float(ss.get("sl") or 0.0) - float(ss["price_open"]))
+                    tol = max(pip_unit * 2.0, tick_size * 10.0)
+                    pair_matches_cfg = (
+                        abs(bs_sl_dist - expected_sld) <= tol
+                        and abs(ss_sl_dist - expected_sld) <= tol
+                        and abs(float(bs.get("volume") or 0.0) - lots) < 1e-6
+                        and abs(float(ss.get("volume") or 0.0) - lots) < 1e-6
+                    )
+                    if pair_matches_cfg:
+                        pair_msg = (
+                            f"Armed & waiting for trigger: BuyStop @ {bs['price_open']}, "
+                            f"SellStop @ {ss['price_open']}"
+                        )
+                        _set_bot_runtime(bot_id, bot.state, pair_msg, None, bot.reversals_count)
+                        await asyncio.sleep(2)
+                        continue
+                    logger.warning(
+                        f"[pipstep_reversal {bot_id}] Pending pair mismatch (SL dist {bs_sl_dist:.5f}/{ss_sl_dist:.5f} vs expected {expected_sld:.5f}). Replacing around live price."
+                    )
+                    await _delete_my_stop_pendings(resolved)
+                    await asyncio.sleep(0.5)
+                elif buy_stops or sell_stops:
                     await _delete_my_stop_pendings(resolved)
                     await asyncio.sleep(0.5)
 

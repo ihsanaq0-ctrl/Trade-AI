@@ -61,13 +61,33 @@ const FALLBACK = {
   defaultPair: 'EURUSD', defaultTimeframe: 'M5'
 }
 
+function getAutoPipInfo(sym) {
+  const s = (sym || '').toUpperCase()
+  if (s.includes('XAU') || s.includes('XAG') || s.includes('GOLD') || s.includes('SILVER')) {
+    return { size: 0.10, decimals: 2, isStandardForex: false }
+  }
+  if (s.includes('JPY')) {
+    return { size: 0.01, decimals: 3, isStandardForex: false }
+  }
+  if (s.includes('BTC') || s.includes('ETH') || s.includes('SOL')) {
+    return { size: 0.01, decimals: 2, isStandardForex: false }
+  }
+  return { size: 0.0001, decimals: 5, isStandardForex: true }
+}
+
 export default function StrategyConfigModal({ strategy, onClose, onSave, initialConfig }) {
   const config = strategyDefaults[strategy] || FALLBACK
   const init = initialConfig || {}
   const initCfg = init.config || {}
   const isPipStep = strategy === 'pipstep_reversal'
+  const initPair = init.pair || config.defaultPair
+  const initAuto = getAutoPipInfo(initPair)
+  const savedPipPrice = parseFloat(initCfg.pip_price || 0) || 0
+  // Auto-reset clearly erroneous forex override (e.g. 0.01 accidentally saved for EURUSD)
+  const hadBadForexOverride = initAuto.isStandardForex && savedPipPrice >= 0.005
+  const effectiveInitPipPrice = hadBadForexOverride ? 0 : savedPipPrice
 
-  const [pair, setPair] = useState(init.pair || config.defaultPair)
+  const [pair, setPair] = useState(initPair)
   const [timeframe, setTimeframe] = useState(init.timeframe || config.defaultTimeframe)
   const [lotSize, setLotSize] = useState(init.lot_size ?? init.lotSize ?? initCfg.lots ?? 0.01)
   const [maxTrades, setMaxTrades] = useState(init.max_trades ?? init.maxTrades ?? 1)
@@ -77,13 +97,22 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
   const [entryPips, setEntryPips] = useState(initCfg.entry_pips ?? 10)
   const [slPips, setSlPips] = useState(initCfg.sl_pips ?? 10)
   const [stepPips, setStepPips] = useState(initCfg.step_pips ?? 10)
-  const [pipPrice, setPipPrice] = useState(initCfg.pip_price ?? 0)
+  const [useCustomPip, setUseCustomPip] = useState(effectiveInitPipPrice > 0)
+  const [pipPrice, setPipPrice] = useState(effectiveInitPipPrice)
   const [maxSpreadPips, setMaxSpreadPips] = useState(initCfg.max_spread_pips ?? 0)
   const [deviationPips, setDeviationPips] = useState(initCfg.deviation_pips ?? 3)
   const [dailyLossPct, setDailyLossPct] = useState(initCfg.daily_loss_pct ?? 10)
   const [dailyProfitPct, setDailyProfitPct] = useState(initCfg.daily_profit_pct ?? 20)
   const [magicNumber, setMagicNumber] = useState(initCfg.magic_number ?? 26110401)
   const [deleteOnRemove, setDeleteOnRemove] = useState(initCfg.delete_on_remove ?? true)
+
+  const autoInfo = getAutoPipInfo(pair)
+  const activePipSize = useCustomPip && (parseFloat(pipPrice) || 0) > 0 ? parseFloat(pipPrice) : autoInfo.size
+  const entryOffsetPrice = ((parseFloat(entryPips) || 10) * activePipSize).toFixed(autoInfo.decimals)
+  const slOffsetPrice = ((parseFloat(slPips) || 10) * activePipSize).toFixed(autoInfo.decimals)
+  const isSuspiciousForexPip = autoInfo.isStandardForex && useCustomPip && activePipSize >= 0.005
+
+  const preventWheelChange = e => e.target.blur()
 
   const backdrop = {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -108,6 +137,10 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
   const handleSave = () => {
     const parsedLots = Math.max(0.01, parseFloat(lotSize) || 0.01)
     if (isPipStep) {
+      let finalPipPrice = useCustomPip ? Math.max(0, parseFloat(pipPrice) || 0) : 0
+      if (autoInfo.isStandardForex && finalPipPrice >= 0.005) {
+        finalPipPrice = 0
+      }
       onSave({
         pair,
         timeframe,
@@ -119,7 +152,7 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
           entry_pips: Math.max(0.1, parseFloat(entryPips) || 10),
           sl_pips: Math.max(0.1, parseFloat(slPips) || 10),
           step_pips: Math.max(0.1, parseFloat(stepPips) || 10),
-          pip_price: Math.max(0, parseFloat(pipPrice) || 0),
+          pip_price: finalPipPrice,
           max_spread_pips: Math.max(0, parseFloat(maxSpreadPips) || 0),
           deviation_pips: Math.max(0.1, parseFloat(deviationPips) || 3),
           daily_loss_pct: Math.max(0.1, parseFloat(dailyLossPct) || 10),
@@ -166,7 +199,7 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
           {isPipStep && (
             <div>
               <label style={label}>Lot Size</label>
-              <input style={input} type="number" step="0.01" min="0.01" max="100" value={lotSize} onChange={e => setLotSize(e.target.value)} />
+              <input style={input} type="number" step="0.01" min="0.01" max="100" value={lotSize} onWheel={preventWheelChange} onChange={e => setLotSize(e.target.value)} />
             </div>
           )}
         </div>
@@ -176,74 +209,112 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
             <div style={row}>
               <div>
                 <label style={label}>Entry Distance (pips)</label>
-                <input style={input} type="number" step="0.5" min="1" value={entryPips} onChange={e => setEntryPips(e.target.value)} />
+                <input style={input} type="number" step="0.5" min="1" value={entryPips} onWheel={preventWheelChange} onChange={e => setEntryPips(e.target.value)} />
               </div>
               <div>
                 <label style={label}>Initial SL (pips)</label>
-                <input style={input} type="number" step="0.5" min="1" value={slPips} onChange={e => setSlPips(e.target.value)} />
+                <input style={input} type="number" step="0.5" min="1" value={slPips} onWheel={preventWheelChange} onChange={e => setSlPips(e.target.value)} />
               </div>
               <div>
                 <label style={label}>Trail Step (pips)</label>
-                <input style={input} type="number" step="0.5" min="1" value={stepPips} onChange={e => setStepPips(e.target.value)} />
+                <input style={input} type="number" step="0.5" min="1" value={stepPips} onWheel={preventWheelChange} onChange={e => setStepPips(e.target.value)} />
               </div>
             </div>
 
             <div style={row}>
               <div>
                 <label style={label}>Daily Loss Stop (%)</label>
-                <input style={input} type="number" step="1" min="1" max="100" value={dailyLossPct} onChange={e => setDailyLossPct(e.target.value)} />
+                <input style={input} type="number" step="1" min="1" max="100" value={dailyLossPct} onWheel={preventWheelChange} onChange={e => setDailyLossPct(e.target.value)} />
               </div>
               <div>
                 <label style={label}>Daily Profit Target (%)</label>
-                <input style={input} type="number" step="1" min="1" max="500" value={dailyProfitPct} onChange={e => setDailyProfitPct(e.target.value)} />
+                <input style={input} type="number" step="1" min="1" max="500" value={dailyProfitPct} onWheel={preventWheelChange} onChange={e => setDailyProfitPct(e.target.value)} />
               </div>
               <div>
                 <label style={label}>Max Spread (pips, 0=off)</label>
-                <input style={input} type="number" step="0.5" min="0" value={maxSpreadPips} onChange={e => setMaxSpreadPips(e.target.value)} />
+                <input style={input} type="number" step="0.5" min="0" value={maxSpreadPips} onWheel={preventWheelChange} onChange={e => setMaxSpreadPips(e.target.value)} />
               </div>
             </div>
 
             <div style={row}>
               <div>
                 <label style={label}>Slippage / Deviation (pips)</label>
-                <input style={input} type="number" step="0.5" min="0.5" value={deviationPips} onChange={e => setDeviationPips(e.target.value)} />
-              </div>
-              <div>
-                <label style={label}>Pip Price Size (0=auto)</label>
-                <input style={input} type="number" step="0.0001" min="0" value={pipPrice} onChange={e => setPipPrice(e.target.value)} />
+                <input style={input} type="number" step="0.5" min="0.5" value={deviationPips} onWheel={preventWheelChange} onChange={e => setDeviationPips(e.target.value)} />
               </div>
               <div>
                 <label style={label}>Magic Number</label>
-                <input style={input} type="number" step="1" min="1" value={magicNumber} onChange={e => setMagicNumber(e.target.value)} />
+                <input style={input} type="number" step="1" min="1" value={magicNumber} onWheel={preventWheelChange} onChange={e => setMagicNumber(e.target.value)} />
               </div>
             </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#cbd5e1', fontSize: 12.5, marginBottom: 14, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={deleteOnRemove}
-                onChange={e => setDeleteOnRemove(e.target.checked)}
-              />
-              Delete pending BuyStop/SellStop orders when bot stops
-            </label>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#cbd5e1', fontSize: 12.5, marginBottom: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={deleteOnRemove}
+                  onChange={e => setDeleteOnRemove(e.target.checked)}
+                />
+                Delete pending BuyStop/SellStop orders when bot stops
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#94a3b8', fontSize: 12, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={useCustomPip}
+                  onChange={e => {
+                    const checked = e.target.checked
+                    setUseCustomPip(checked)
+                    if (!checked) setPipPrice(0)
+                  }}
+                />
+                Advanced: Override auto pip size manually (currently Auto: {autoInfo.size})
+              </label>
+
+              {useCustomPip && (
+                <div style={{ marginTop: 8 }}>
+                  <label style={label}>Manual Pip Size in Price Units (e.g. 0.0001 for EURUSD, 0.10 for XAUUSD)</label>
+                  <input
+                    style={input}
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    value={pipPrice}
+                    onWheel={preventWheelChange}
+                    onChange={e => setPipPrice(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            {hadBadForexOverride && (
+              <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#fbbf24', fontSize: 12 }}>
+                Previous manual Pip Size ({savedPipPrice}) was reset to <strong>Auto ({initAuto.size})</strong> so orders place at {entryPips} real pips instead of 1,000+ pips away.
+              </div>
+            )}
+
+            {isSuspiciousForexPip && (
+              <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', color: '#fca5a5', fontSize: 12 }}>
+                Warning: {activePipSize} is 100x+ larger than a normal {pair} pip ({autoInfo.size}). Uncheck manual override above to use Auto ({autoInfo.size}).
+              </div>
+            )}
           </>
         ) : (
           <>
             <div style={row}>
               <div>
                 <label style={label}>Lot Size</label>
-                <input style={input} type="number" step="0.01" min="0.01" max="100" value={lotSize} onChange={e => setLotSize(e.target.value)} />
+                <input style={input} type="number" step="0.01" min="0.01" max="100" value={lotSize} onWheel={preventWheelChange} onChange={e => setLotSize(e.target.value)} />
               </div>
               <div>
                 <label style={label}>Max Trades</label>
-                <input style={input} type="number" min="1" max="100" value={maxTrades} onChange={e => setMaxTrades(e.target.value)} />
+                <input style={input} type="number" min="1" max="100" value={maxTrades} onWheel={preventWheelChange} onChange={e => setMaxTrades(e.target.value)} />
               </div>
             </div>
 
             <div style={row}>
               <div>
                 <label style={label}>Max Daily Loss ($)</label>
-                <input style={input} type="number" step="10" min="10" value={maxDailyLoss} onChange={e => setMaxDailyLoss(e.target.value)} />
+                <input style={input} type="number" step="10" min="10" value={maxDailyLoss} onWheel={preventWheelChange} onChange={e => setMaxDailyLoss(e.target.value)} />
               </div>
             </div>
           </>
@@ -263,7 +334,7 @@ export default function StrategyConfigModal({ strategy, onClose, onSave, initial
           )}
           {isPipStep && (
             <span style={{ display: 'block', marginTop: 4, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.1)', padding: '8px 12px', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
-              <strong>PipStep Reversal EA (No TP):</strong> Places symmetrical BuyStop &amp; SellStop pending orders at {entryPips} pips. Cancels the opposite stop on trigger, trails SL in {stepPips}-pip steps, and reverses immediately when SL hits.
+              <strong>PipStep Preview ({pair}):</strong> 1 pip = {useCustomPip ? activePipSize : `${autoInfo.size} (Auto)`} · BuyStop = Ask + {entryOffsetPrice} · SellStop = Bid − {entryOffsetPrice} · SL = {slOffsetPrice} · Trail = {stepPips} pips · No TP.
             </span>
           )}
         </p>

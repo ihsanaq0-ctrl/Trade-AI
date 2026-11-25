@@ -90,7 +90,6 @@ export default function Bot({ session, userPlan: propPlan = 'free' }) {
         setApiError(null)
       } catch (e) {
         setApiError(e.message)
-        setActiveBots([])
       } finally {
         setLoading(false)
       }

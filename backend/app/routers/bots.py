@@ -227,6 +227,26 @@ async def start_bot(bot_id: str, user=Depends(get_current_user)):
             )
 
         try:
+            # Prevent duplicate active bots of the same strategy + pair competing over the same MT5 orders
+            dup_res = await asyncio.to_thread(
+                lambda: supabase.table("bot_settings")
+                .select("id, pair, strategy, config")
+                .eq("user_id", user["sub"])
+                .eq("status", "running")
+                .execute()
+            )
+            target_pair = (result.data.get("pair") or "").upper()
+            for dup in dup_res.data or []:
+                if dup["id"] != bot_id and _resolve_strategy_name(dup) == strategy_name and (dup.get("pair") or "").upper() == target_pair:
+                    await bot_engine.stop_bot(dup["id"])
+                    await asyncio.to_thread(
+                        lambda did=dup["id"]: supabase.table("bot_settings")
+                        .update({"status": "stopped", "updated_at": datetime.utcnow().isoformat()})
+                        .eq("id", did)
+                        .eq("user_id", user["sub"])
+                        .execute()
+                    )
+
             await asyncio.to_thread(
                 lambda: supabase.table("bot_settings").update({
                     "account_id": user_acc["id"],

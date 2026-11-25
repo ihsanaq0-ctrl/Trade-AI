@@ -100,16 +100,24 @@ class PipStepReversalBot(BaseStrategy):
         self.last_msg = s
 
     def detect_pip(self, symbol: str, digits: int = 5, point: Optional[float] = None) -> float:
-        """Exact match to MQL5 DetectPip()."""
-        if self.pip_price > 0.0:
-            return float(self.pip_price)
+        """Exact match to MQL5 DetectPip(), with guard against accidental lot-size-like 0.01 entry on 5-digit forex."""
         s = (symbol or "").upper()
-        if any(m in s for m in ("XAU", "XAG", "GOLD", "SILVER")):
-            return 0.10
+        is_metal = any(m in s for m in ("XAU", "XAG", "GOLD", "SILVER"))
+        is_jpy = "JPY" in s
         pt = float(point) if (point is not None and point > 0.0) else (10.0 ** -digits)
-        if digits in (3, 5):
-            return 10.0 * pt
-        return pt
+        auto_pip = 0.10 if is_metal else ((10.0 * pt) if digits in (3, 5) else pt)
+
+        if self.pip_price > 0.0:
+            # Guard: on standard 5-digit non-JPY forex pairs (e.g. EURUSDc where auto_pip = 0.0001),
+            # a value >= 0.005 (like 0.01 entered by confusion with 0.01 lots) places orders 100x too far (1,000 pips).
+            if digits == 5 and not is_metal and not is_jpy and self.pip_price >= 0.005:
+                logger.warning(
+                    "[PIPSTEP] Ignoring oversized pip_price=%s on 5-digit forex %s (100x+ real pip); using auto=%s.",
+                    self.pip_price, symbol, auto_pip
+                )
+                return auto_pip
+            return float(self.pip_price)
+        return auto_pip
 
     def norm_price(self, p: float, tick_size: float = 0.0, digits: int = 5) -> float:
         """Exact match to MQL5 NormPrice() using SYMBOL_TRADE_TICK_SIZE."""
