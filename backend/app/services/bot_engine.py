@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 import pandas as pd
-from app.database import supabase
+from app.database import supabase, reset_thread_supabase
 from app.services import metaapi_service as mt5
 from app.services.scalp_scheduler import _symbols_match
 
@@ -43,13 +43,23 @@ async def _verify_bot_terminal_ownership(bot_cfg: dict) -> tuple[bool, str, str]
         return False, "", "Missing user_id on bot configuration"
     try:
         def _get_owner_acc():
-            return (
-                supabase.table("accounts")
-                .select("id, login, status")
-                .eq("user_id", user_id)
-                .eq("status", "connected")
-                .execute()
-            )
+            try:
+                return (
+                    supabase.table("accounts")
+                    .select("id, login, status")
+                    .eq("user_id", user_id)
+                    .eq("status", "connected")
+                    .execute()
+                )
+            except Exception:
+                reset_thread_supabase()
+                return (
+                    supabase.table("accounts")
+                    .select("id, login, status")
+                    .eq("user_id", user_id)
+                    .eq("status", "connected")
+                    .execute()
+                )
 
         acc_res, terminal_info = await asyncio.gather(
             asyncio.to_thread(_get_owner_acc),
@@ -1148,11 +1158,27 @@ async def _bot_loop_pipstep_reversal(bot_id: str):
         except Exception as ins_err:
             logger.debug(f"[pipstep_reversal {bot_id}] Trade record note: {ins_err}")
 
+    def _fetch_bot_row():
+        try:
+            return supabase.table("bot_settings").select("*").eq("id", bot_id).single().execute()
+        except Exception:
+            reset_thread_supabase()
+            return supabase.table("bot_settings").select("*").eq("id", bot_id).single().execute()
+
     try:
+        _transient_failures = 0
         while True:
-            result = await asyncio.to_thread(
-                lambda: supabase.table("bot_settings").select("*").eq("id", bot_id).single().execute()
-            )
+            try:
+                result = await asyncio.to_thread(_fetch_bot_row)
+                _transient_failures = 0
+            except Exception as net_err:
+                _transient_failures += 1
+                logger.warning(f"[pipstep_reversal {bot_id}] Transient DB poll error (#{_transient_failures}): {net_err}")
+                if _transient_failures >= 15:
+                    raise
+                await asyncio.sleep(2)
+                continue
+
             if not result.data or result.data.get("status") != "running":
                 break
 
