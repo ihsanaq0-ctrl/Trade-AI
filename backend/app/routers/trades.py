@@ -102,9 +102,14 @@ async def open_manual_trade(data: TradeOpenRequest, user=Depends(get_current_use
             "status": "open",
             "reason": data.reason or "Manual Analysis",
             "opened_at": opened_at,
-            "ticket": ticket_val,
         }
-        supabase.table("trades").insert(trade_record).execute()
+        try:
+            supabase.table("trades").insert({**trade_record, "ticket": ticket_val}).execute()
+        except Exception as col_err:
+            if "ticket" in str(col_err).lower():
+                supabase.table("trades").insert(trade_record).execute()
+            else:
+                raise col_err
     except Exception as e:
         logger.error(f"Failed to insert manual trade record: {e}")
 

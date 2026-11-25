@@ -5,6 +5,7 @@ import {
   Sparkles, Save, Database
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
+import { supabase } from '../supabase'
 
 export default function Settings({ session }) {
   const toast = useToast()
@@ -50,7 +51,6 @@ export default function Settings({ session }) {
     try {
       localStorage.setItem('trade_profile_name', profile.name)
       if (session?.user) {
-        const { supabase } = await import('../Supabase')
         await supabase.auth.updateUser({
           data: { full_name: profile.name }
         })

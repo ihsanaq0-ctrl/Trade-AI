@@ -17,6 +17,13 @@ _TIMEFRAMES = {}
 
 def _ensure_mt5():
     global _initialized, _mt5_mod, _symbol_cache, _TIMEFRAMES
+    if _initialized and _mt5_mod is not None:
+        try:
+            if _mt5_mod.terminal_info() is None:
+                _initialized = False
+        except Exception:
+            _initialized = False
+
     if not _initialized:
         import MetaTrader5 as mt5
         if not mt5.initialize():

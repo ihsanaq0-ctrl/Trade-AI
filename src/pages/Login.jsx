@@ -58,11 +58,11 @@ export default function Login() {
       return
     }
     if (data.user) {
-      const { error: profileError } = await supabase.from('profiles').insert([{
+      const { error: profileError } = await supabase.from('profiles').upsert([{
         id: data.user.id,
         name,
         email
-      }])
+      }], { onConflict: 'id' })
       if (profileError) {
         setError(profileError.message)
         setLoading(false)

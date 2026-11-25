@@ -87,8 +87,9 @@ export default function ChartModal({ pair, onClose }) {
 
   const isJpy = symbol.includes('JPY')
   const isCrypto = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'ADA'].some(c => symbol.startsWith(c))
-  const decimals = isCrypto ? 2 : isJpy ? 3 : 5
-  const pipMultiplier = isJpy ? 100 : isCrypto ? 1 : symbol.startsWith('XAU') ? 10 : 10000
+  const isMetal = symbol.startsWith('XAU') || symbol.startsWith('XAG') || symbol.includes('GOLD') || symbol.includes('SILVER')
+  const decimals = (isCrypto || isMetal) ? 2 : isJpy ? 3 : 5
+  const pipMultiplier = isJpy ? 100 : isCrypto ? 1 : isMetal ? 10 : 10000
 
   const toFixed = (v) => (v !== null && v !== undefined && !isNaN(v)) ? Number(v).toFixed(decimals) : '--'
 

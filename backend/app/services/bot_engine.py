@@ -27,8 +27,8 @@ def _get_strategy(strategy_name: str, bot_config: dict = None) -> Optional:
         from app.services.strategies.classic import ClassicStrategy
         from app.services.strategies.full_confluence import FullConfluenceStrategy
 
-        sm = SmartMoneyStrategy(swing_lookback=5, displacement_multiplier=1.5, atr_period=14, min_rr=1.0)
-        mmc = MirrorStrategy(swing_lookback=5, zone_tolerance_pct=0.0015, min_rr=1.0)
+        sm = SmartMoneyStrategy(swing_lookback=5, displacement_atr_mult=1.5, atr_period=14, min_rr=1.0)
+        mmc = MirrorStrategy(swing_lookback=5, min_rr=1.0)
         snr = ClassicStrategy(swing_lookback=5, zone_atr_multiplier=0.5, min_touches=2, atr_period=14, min_rr=1.0)
         return FullConfluenceStrategy(smart_money_bot=sm, mirror_bot=mmc, classic_bot=snr, min_rr=4.0)
 
