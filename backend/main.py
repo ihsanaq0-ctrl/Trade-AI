@@ -5,9 +5,11 @@ from app.routers import health, accounts, bots, trades, analytics, payments, adm
 
 app = FastAPI(title="Trade-AI API", version="1.0.0")
 
+_origins = [o.strip().rstrip("/") for o in (settings.cors_origins or "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.cors_origins] if settings.cors_origins else ["*"],
+    allow_origins=_origins or ["*"],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
